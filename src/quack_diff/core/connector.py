@@ -122,8 +122,15 @@ class DuckDBConnector:
         warehouse: str | None = None,
         role: str | None = None,
         config: SnowflakeConfig | None = None,
+        connection_name: str | None = None,
     ) -> AttachedDatabase:
         """Attach a Snowflake database.
+
+        Credentials can be provided in multiple ways (in priority order):
+        1. Explicit parameters (account, user, password)
+        2. config parameter (SnowflakeConfig instance)
+        3. connection_name -> reads from ~/.snowflake/connections.toml
+        4. Settings from environment variables
 
         Args:
             name: Alias for the attached database
@@ -134,6 +141,7 @@ class DuckDBConnector:
             warehouse: Compute warehouse (optional)
             role: User role (optional)
             config: SnowflakeConfig instance (alternative to individual params)
+            connection_name: Connection profile from ~/.snowflake/connections.toml
 
         Returns:
             AttachedDatabase instance
@@ -141,6 +149,11 @@ class DuckDBConnector:
         Raises:
             ValueError: If required parameters are missing
         """
+        # If connection_name provided, create a config from it
+        if connection_name is not None and config is None:
+            from quack_diff.config import SnowflakeConfig as SFConfig
+            config = SFConfig(connection_name=connection_name)
+
         # Use config or settings if parameters not provided
         if config is None and self._settings is not None:
             config = self._settings.snowflake
@@ -156,7 +169,7 @@ class DuckDBConnector:
         if not all([account, user, password]):
             raise ValueError(
                 "Snowflake connection requires account, user, and password. "
-                "Provide via parameters, config, or environment variables."
+                "Provide via parameters, config, connection_name, or environment variables."
             )
 
         self._install_extension("snowflake")
