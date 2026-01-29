@@ -15,8 +15,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Database",
     "Topic :: Software Development :: Testing",
 ]
@@ -34,6 +34,7 @@ quack-diff = "quack_diff.cli.main:app"
 [project.urls]
 Homepage = "https://github.com/matteorenoldi/quack-diff"
 Repository = "https://github.com/matteorenoldi/quack-diff"
+Issues = "https://github.com/matteorenoldi/quack-diff/issues"
 
 [build-system]
 requires = ["hatchling"]
