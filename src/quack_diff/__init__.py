@@ -4,7 +4,7 @@ quack-diff: The zero-dependency regression testing tool for modern data warehous
 DuckDB-powered data diffing across Snowflake, Postgres, and more.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.0.1"
 __author__ = "Matteo Renoldi"
 
 from quack_diff.core.connector import DuckDBConnector

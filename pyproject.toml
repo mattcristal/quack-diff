@@ -1,13 +1,13 @@
 [project]
 name = "quack-diff"
-version = "0.1.0"
+version = "0.0.1"
 description = "The zero-dependency regression testing tool for modern data warehouses. DuckDB-powered data diffing across Snowflake, Postgres, and more."
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "Matteo Renoldi", email = "matteo@renoldi.org" }
+    { name = "Matteo Renoldi", email = "matteo.renoldi@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 keywords = ["data", "diff", "duckdb", "snowflake", "postgres", "regression-testing", "data-quality"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -48,7 +48,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
