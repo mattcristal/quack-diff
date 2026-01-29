@@ -1,5 +1,9 @@
 # quack-diff
 
+<p align="center">
+  <img src="images/quack_diff.jpg" alt="quack-diff logo" width="500">
+</p>
+
 The zero-dependency regression testing tool for modern data warehouses.
 
 DuckDB-powered data diffing across Snowflake, Postgres, and more.
