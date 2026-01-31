@@ -19,12 +19,6 @@ DuckDB-powered data diffing for Snowflake.
 ## Installation
 
 ```bash
-pip install quack-diff
-```
-
-Or with uv:
-
-```bash
 uv add quack-diff
 ```
 
@@ -98,6 +92,9 @@ cd quack-diff
 
 # Install with dev dependencies
 uv sync
+
+# Install pre-commit hooks
+uv run prek install
 
 # Run tests
 uv run pytest
