@@ -1,6 +1,5 @@
 """Tests for the DuckDB connector module."""
 
-
 from quack_diff.core.connector import DatabaseType, DuckDBConnector, create_connector
 
 
@@ -63,6 +62,7 @@ class TestDuckDBConnector:
         # Create a temporary DuckDB file
         db_path = tmp_path / "test.duckdb"
         import duckdb
+
         temp_conn = duckdb.connect(str(db_path))
         temp_conn.execute("CREATE TABLE remote_table (id INT, name VARCHAR)")
         temp_conn.execute("INSERT INTO remote_table VALUES (1, 'test')")
@@ -84,6 +84,7 @@ class TestDuckDBConnector:
         # Create and attach a temporary database
         db_path = tmp_path / "detach_test.duckdb"
         import duckdb
+
         temp_conn = duckdb.connect(str(db_path))
         temp_conn.execute("CREATE TABLE t (id INT)")
         temp_conn.close()
@@ -98,6 +99,7 @@ class TestDuckDBConnector:
         """Test that attached_databases returns a copy."""
         db_path = tmp_path / "copy_test.duckdb"
         import duckdb
+
         temp_conn = duckdb.connect(str(db_path))
         temp_conn.execute("CREATE TABLE t (id INT)")
         temp_conn.close()

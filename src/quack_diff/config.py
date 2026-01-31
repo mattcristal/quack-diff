@@ -86,9 +86,7 @@ def load_snowflake_connection(
         available = []
         if "connections" in config:
             available.extend(config["connections"].keys())
-        available.extend(
-            k for k in config.keys() if k != "connections" and isinstance(config[k], dict)
-        )
+        available.extend(k for k in config if k != "connections" and isinstance(config[k], dict))
         raise KeyError(
             f"Connection '{connection_name}' not found in {file_path}.\n"
             f"Available connections: {', '.join(available) or 'none'}"
@@ -123,9 +121,7 @@ class SnowflakeConfig(BaseSettings):
     user: str | None = Field(default=None, description="Snowflake username")
     password: str | None = Field(default=None, description="Snowflake password")
     database: str | None = Field(default=None, description="Default database")
-    schema_name: str | None = Field(
-        default=None, alias="schema", description="Default schema"
-    )
+    schema_name: str | None = Field(default=None, alias="schema", description="Default schema")
     warehouse: str | None = Field(default=None, description="Compute warehouse")
     role: str | None = Field(default=None, description="User role")
 

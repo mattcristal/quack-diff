@@ -148,9 +148,7 @@ class BaseAdapter(ABC):
             NotImplementedError: If dialect doesn't support time-travel
         """
         if not self.supports_time_travel:
-            raise NotImplementedError(
-                f"{self.dialect.value} does not support time-travel queries"
-            )
+            raise NotImplementedError(f"{self.dialect.value} does not support time-travel queries")
         return ""
 
     def wrap_table_with_time_travel(

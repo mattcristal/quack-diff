@@ -130,8 +130,7 @@ class SnowflakeAdapter(BaseAdapter):
         parts = offset.split()
         if len(parts) != 2:
             raise ValueError(
-                f"Invalid offset format: '{offset}'. "
-                "Expected format like '5 minutes' or '1 hour'"
+                f"Invalid offset format: '{offset}'. Expected format like '5 minutes' or '1 hour'"
             )
 
         try:
@@ -150,8 +149,7 @@ class SnowflakeAdapter(BaseAdapter):
 
         if unit not in multipliers:
             raise ValueError(
-                f"Unknown time unit: '{unit}'. "
-                f"Supported units: {list(multipliers.keys())}"
+                f"Unknown time unit: '{unit}'. Supported units: {list(multipliers.keys())}"
             )
 
         return value * multipliers[unit]
