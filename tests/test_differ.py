@@ -18,14 +18,14 @@ class TestColumnInfo:
         """Test column name comparison (case-insensitive)."""
         col1 = ColumnInfo(name="Name", data_type="VARCHAR")
         col2 = ColumnInfo(name="name", data_type="TEXT")
-        
+
         assert col1 == col2
 
     def test_type_matching(self):
         """Test type compatibility checking."""
         col1 = ColumnInfo(name="id", data_type="INTEGER")
         col2 = ColumnInfo(name="id", data_type="INT")
-        
+
         assert col1.type_matches(col2)
 
     def test_type_normalization(self):
@@ -47,10 +47,10 @@ class TestSchemaComparison:
         connector.execute("""
             CREATE TABLE schema_b (id INT, name VARCHAR, value DECIMAL(10, 2))
         """)
-        
+
         differ = DataDiffer(connector)
         result = differ.compare_schemas("schema_a", "schema_b")
-        
+
         assert result.is_identical
         assert result.is_compatible
         assert len(result.matching_columns) == 3
@@ -61,7 +61,7 @@ class TestSchemaComparison:
         """Test comparing different schemas."""
         differ = DataDiffer(schema_mismatch_tables)
         result = differ.compare_schemas("schema_source", "schema_target")
-        
+
         assert not result.is_identical
         assert result.is_compatible  # Has some matching columns
         assert "old_column" in result.source_only_columns
@@ -79,12 +79,12 @@ class TestDataDiffer:
             target_table="target_table",
             key_column="id",
         )
-        
+
         assert isinstance(result, DiffResult)
         assert result.source_row_count == 5
         assert result.target_row_count == 5
         assert result.total_differences > 0
-        
+
         # Check specific differences
         assert result.added_count == 1  # Frank added
         assert result.removed_count == 1  # Diana removed
@@ -98,7 +98,7 @@ class TestDataDiffer:
             target_table="identical_target",
             key_column="id",
         )
-        
+
         assert result.is_match
         assert result.total_differences == 0
 
@@ -110,7 +110,7 @@ class TestDataDiffer:
             target_table="null_target",
             key_column="id",
         )
-        
+
         # Tables have identical data including NULLs
         assert result.is_match
         assert result.total_differences == 0
@@ -124,7 +124,7 @@ class TestDataDiffer:
             key_column="id",
             threshold=0.5,  # 50% threshold
         )
-        
+
         # With 50% threshold, some differences should be within tolerance
         assert result.threshold == 0.5
         # Check if within threshold (depends on actual diff percentage)
@@ -139,7 +139,7 @@ class TestDataDiffer:
             key_column="id",
             columns=["id", "name"],  # Only compare id and name
         )
-        
+
         assert "id" in result.columns_compared
         assert "name" in result.columns_compared
         # email changes should not be detected since we didn't include it
@@ -154,7 +154,7 @@ class TestDataDiffer:
             key_column="id",
             limit=1,
         )
-        
+
         # Should only return up to 1 difference
         assert len(result.differences) <= 1
 
@@ -166,7 +166,7 @@ class TestDataDiffer:
             target_table="identical_target",
             key_column="id",
         )
-        
+
         assert is_match is True
 
     def test_quick_check_different_tables(self, sample_tables: DuckDBConnector):
@@ -177,7 +177,7 @@ class TestDataDiffer:
             target_table="target_table",
             key_column="id",
         )
-        
+
         assert is_match is False
 
 
@@ -194,13 +194,13 @@ class TestDiffResult:
             schema_comparison=SchemaComparisonResult([], []),
             differences=[],
         )
-        
+
         assert result.diff_percentage == 0.0
 
     def test_diff_percentage_with_differences(self):
         """Test diff percentage with differences."""
         from quack_diff.core.differ import RowDiff
-        
+
         result = DiffResult(
             source_table="src",
             target_table="tgt",
@@ -212,13 +212,13 @@ class TestDiffResult:
                 RowDiff(key=2, diff_type=DiffType.MODIFIED),
             ],
         )
-        
+
         assert result.diff_percentage == 2.0
 
     def test_is_within_threshold(self):
         """Test threshold checking."""
         from quack_diff.core.differ import RowDiff
-        
+
         result = DiffResult(
             source_table="src",
             target_table="tgt",
@@ -228,13 +228,13 @@ class TestDiffResult:
             differences=[RowDiff(key=1, diff_type=DiffType.MODIFIED)],
             threshold=0.05,  # 5% threshold
         )
-        
+
         assert result.is_within_threshold  # 1% < 5%
 
     def test_is_not_within_threshold(self):
         """Test when differences exceed threshold."""
         from quack_diff.core.differ import RowDiff
-        
+
         result = DiffResult(
             source_table="src",
             target_table="tgt",
@@ -246,5 +246,5 @@ class TestDiffResult:
             ],
             threshold=0.05,  # 5% threshold
         )
-        
+
         assert not result.is_within_threshold  # 10% > 5%

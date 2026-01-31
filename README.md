@@ -78,7 +78,7 @@ snowflake:
   account: your-account
   user: your-user
   database: your-database
-  
+
 postgres:
   connection_string: postgresql://user:pass@host:5432/db
 

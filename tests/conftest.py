@@ -36,7 +36,7 @@ def connector():
 @pytest.fixture
 def sample_tables(connector: DuckDBConnector):
     """Create sample tables for testing.
-    
+
     Creates two tables:
     - source_table: Original data
     - target_table: Modified data (with added, removed, modified rows)
@@ -51,7 +51,7 @@ def sample_tables(connector: DuckDBConnector):
             score DECIMAL(10, 2)
         )
     """)
-    
+
     connector.execute("""
         INSERT INTO source_table VALUES
             (1, 'Alice', 'alice@example.com', 30, 95.50),
@@ -60,7 +60,7 @@ def sample_tables(connector: DuckDBConnector):
             (4, 'Diana', 'diana@example.com', 28, 91.00),
             (5, 'Eve', 'eve@example.com', 32, 87.25)
     """)
-    
+
     # Create target table with modifications
     connector.execute("""
         CREATE TABLE target_table (
@@ -71,7 +71,7 @@ def sample_tables(connector: DuckDBConnector):
             score DECIMAL(10, 2)
         )
     """)
-    
+
     connector.execute("""
         INSERT INTO target_table VALUES
             (1, 'Alice', 'alice@example.com', 30, 95.50),  -- unchanged
@@ -81,7 +81,7 @@ def sample_tables(connector: DuckDBConnector):
             (6, 'Frank', 'frank@example.com', 29, 90.00)  -- added
             -- Diana (4) removed
     """)
-    
+
     return connector
 
 
@@ -95,19 +95,19 @@ def identical_tables(connector: DuckDBConnector):
             value DECIMAL(10, 2)
         )
     """)
-    
+
     connector.execute("""
         INSERT INTO identical_source VALUES
             (1, 'Item A', 100.00),
             (2, 'Item B', 200.00),
             (3, 'Item C', 300.00)
     """)
-    
+
     connector.execute("""
-        CREATE TABLE identical_target AS 
+        CREATE TABLE identical_target AS
         SELECT * FROM identical_source
     """)
-    
+
     return connector
 
 
@@ -121,14 +121,14 @@ def null_handling_tables(connector: DuckDBConnector):
             optional_field VARCHAR
         )
     """)
-    
+
     connector.execute("""
         INSERT INTO null_source VALUES
             (1, 'With Value', 'value'),
             (2, 'With NULL', NULL),
             (3, 'With Empty', '')
     """)
-    
+
     connector.execute("""
         CREATE TABLE null_target (
             id INTEGER PRIMARY KEY,
@@ -136,7 +136,7 @@ def null_handling_tables(connector: DuckDBConnector):
             optional_field VARCHAR
         )
     """)
-    
+
     # Same data - should match exactly
     connector.execute("""
         INSERT INTO null_target VALUES
@@ -144,7 +144,7 @@ def null_handling_tables(connector: DuckDBConnector):
             (2, 'With NULL', NULL),
             (3, 'With Empty', '')
     """)
-    
+
     return connector
 
 
@@ -159,7 +159,7 @@ def schema_mismatch_tables(connector: DuckDBConnector):
             shared_column INTEGER
         )
     """)
-    
+
     connector.execute("""
         CREATE TABLE schema_target (
             id INTEGER PRIMARY KEY,
@@ -168,5 +168,5 @@ def schema_mismatch_tables(connector: DuckDBConnector):
             shared_column INTEGER
         )
     """)
-    
+
     return connector
