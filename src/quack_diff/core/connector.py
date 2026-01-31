@@ -1,7 +1,7 @@
 """DuckDB connection manager with external database attachment support.
 
 Uses DuckDB's extension system to connect to external databases like
-Snowflake and PostgreSQL, treating them as local tables for querying.
+Snowflake, treating them as local tables for querying.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 import duckdb
 
 if TYPE_CHECKING:
-    from quack_diff.config import PostgresConfig, Settings, SnowflakeConfig
+    from quack_diff.config import Settings, SnowflakeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +26,6 @@ class DatabaseType(str, Enum):
 
     DUCKDB = "duckdb"
     SNOWFLAKE = "snowflake"
-    POSTGRES = "postgres"
-    MYSQL = "mysql"
-    SQLITE = "sqlite"
 
 
 @dataclass
@@ -198,66 +195,6 @@ class DuckDBConnector:
             db_type=DatabaseType.SNOWFLAKE,
             attached=True,
             metadata={"account": account, "database": database},
-        )
-        self._attached_databases[name] = attached
-        return attached
-
-    def attach_postgres(
-        self,
-        name: str,
-        connection_string: str | None = None,
-        host: str | None = None,
-        port: int = 5432,
-        user: str | None = None,
-        password: str | None = None,
-        database: str | None = None,
-        config: PostgresConfig | None = None,
-    ) -> AttachedDatabase:
-        """Attach a PostgreSQL database.
-
-        Args:
-            name: Alias for the attached database
-            connection_string: Full PostgreSQL connection string
-            host: PostgreSQL host
-            port: PostgreSQL port
-            user: PostgreSQL username
-            password: PostgreSQL password
-            database: PostgreSQL database name
-            config: PostgresConfig instance (alternative to individual params)
-
-        Returns:
-            AttachedDatabase instance
-
-        Raises:
-            ValueError: If required parameters are missing
-        """
-        # Use config or settings if parameters not provided
-        if config is None and self._settings is not None:
-            config = self._settings.postgres
-
-        if config is not None:
-            connection_string = connection_string or config.get_connection_string()
-
-        # Build connection string from parts if not provided
-        if connection_string is None:
-            if not all([host, user, database]):
-                raise ValueError(
-                    "PostgreSQL connection requires connection_string or host/user/database. "
-                    "Provide via parameters, config, or environment variables."
-                )
-            pwd = f":{password}" if password else ""
-            connection_string = f"postgresql://{user}{pwd}@{host}:{port}/{database}"
-
-        self._install_extension("postgres")
-
-        logger.info(f"Attaching PostgreSQL database as '{name}'")
-        self.connection.execute(f"ATTACH '{connection_string}' AS {name} (TYPE postgres)")
-
-        attached = AttachedDatabase(
-            name=name,
-            db_type=DatabaseType.POSTGRES,
-            attached=True,
-            metadata={"connection_string": connection_string[:50] + "..."},  # Truncate for safety
         )
         self._attached_databases[name] = attached
         return attached

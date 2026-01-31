@@ -6,7 +6,7 @@
 
 The zero-dependency regression testing tool for modern data warehouses.
 
-DuckDB-powered data diffing across Snowflake, Postgres, and more.
+DuckDB-powered data diffing for Snowflake.
 
 ## Features
 
@@ -66,9 +66,6 @@ quack-diff supports configuration via environment variables:
 export QUACK_DIFF_SNOWFLAKE_ACCOUNT="your-account"
 export QUACK_DIFF_SNOWFLAKE_USER="your-user"
 export QUACK_DIFF_SNOWFLAKE_PASSWORD="your-password"
-
-# PostgreSQL
-export QUACK_DIFF_POSTGRES_CONNECTION_STRING="postgresql://user:pass@host:5432/db"
 ```
 
 Or via a `quack-diff.yaml` configuration file:
@@ -79,9 +76,6 @@ snowflake:
   user: your-user
   database: your-database
 
-postgres:
-  connection_string: postgresql://user:pass@host:5432/db
-
 defaults:
   threshold: 0.0
 ```
@@ -90,7 +84,7 @@ defaults:
 
 quack-diff leverages DuckDB's extension system to connect to external databases:
 
-1. **Attach**: Mount remote databases using DuckDB extensions (snowflake, postgres_scanner)
+1. **Attach**: Mount remote databases using DuckDB extensions (snowflake)
 2. **Hash**: Generate row-level hashes using dialect-safe SQL (handles NULLs, type coercion)
 3. **Compare**: Identify mismatches by comparing hash values
 4. **Report**: Display results in beautiful terminal tables

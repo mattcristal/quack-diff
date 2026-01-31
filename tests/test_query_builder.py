@@ -43,17 +43,6 @@ class TestQueryBuilder:
         assert "CAST" in query
         assert "VARCHAR" in query
 
-    def test_build_hash_query_postgres(self, builder: QueryBuilder):
-        """Test hash query generation for PostgreSQL."""
-        query = builder.build_hash_query(
-            table="my_table",
-            columns=["id", "name"],
-            key_column="id",
-            dialect=Dialect.POSTGRES,
-        )
-
-        assert "::TEXT" in query
-
     def test_build_count_query(self, builder: QueryBuilder):
         """Test count query generation."""
         query = builder.build_count_query(
