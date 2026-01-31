@@ -9,7 +9,6 @@ import typer
 
 from quack_diff.cli.console import console, print_error, print_success
 from quack_diff.config import get_settings
-from quack_diff.core.adapters.base import Dialect
 from quack_diff.core.connector import DuckDBConnector
 
 
@@ -18,22 +17,14 @@ def attach(
         str,
         typer.Argument(help="Name/alias for the attached database"),
     ],
-    db_type: Annotated[
-        str,
-        typer.Option(
-            "--type",
-            "-t",
-            help="Database type (snowflake, duckdb)",
-        ),
-    ] = "duckdb",
     path: Annotated[
-        str | None,
+        str,
         typer.Option(
             "--path",
             "-p",
-            help="Path to database file (for DuckDB)",
+            help="Path to DuckDB database file",
         ),
-    ] = None,
+    ],
     config_file: Annotated[
         Path | None,
         typer.Option(
@@ -42,35 +33,26 @@ def attach(
         ),
     ] = None,
 ) -> None:
-    """Attach an external database and list its tables.
+    """Attach a DuckDB database and list its tables.
 
     This is a utility command to verify database connectivity
     and explore available tables.
 
+    Note: For Snowflake tables, use the 'diff' command directly with
+    sf.SCHEMA.TABLE syntax. Snowflake data is pulled using the native
+    connector which supports time-travel queries.
+
     Example:
 
-        quack-diff attach mydb --type duckdb --path ./data/mydb.duckdb
+        quack-diff attach mydb --path ./data/mydb.duckdb
     """
     try:
         settings = get_settings(config_file=config_file)
 
         with DuckDBConnector(settings=settings) as connector:
-            dialect = Dialect(db_type.lower())
+            connector.attach_duckdb(name, path)
 
-            if dialect == Dialect.DUCKDB:
-                if not path:
-                    print_error("--path is required for DuckDB databases")
-                    raise typer.Exit(2)
-                connector.attach_duckdb(name, path)
-
-            elif dialect == Dialect.SNOWFLAKE:
-                connector.attach_snowflake(name)
-
-            else:
-                print_error(f"Unsupported database type: {db_type}")
-                raise typer.Exit(2)
-
-            print_success(f"Attached {db_type} database as '{name}'")
+            print_success(f"Attached DuckDB database as '{name}'")
 
             # List tables
             result = connector.execute_fetchall(f"SHOW TABLES IN {name}")
