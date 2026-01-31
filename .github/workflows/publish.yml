@@ -2,7 +2,7 @@ name: Publish to PyPI
 
 on:
   release:
-    types: [published, prereleased]
+    types: [published]
 
 permissions:
   contents: read
@@ -11,12 +11,7 @@ permissions:
 jobs:
   build-n-publish:
     name: Build and publish to PyPI
-    runs-on: ubuntu-latest
-
-    # Optional: If you created a specifically named "Environment" in PyPI, uncomment below:
-    # environment:
-    #   name: pypi
-    #   url: https://pypi.org/p/quack-diff
+    runs-on: ubuntu-slim
 
     steps:
     - uses: actions/checkout@v6
