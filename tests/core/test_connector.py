@@ -1,5 +1,7 @@
 """Tests for the DuckDB connector module."""
 
+import pytest
+
 from quack_diff.core.connector import DatabaseType, DuckDBConnector, create_connector
 
 
@@ -133,3 +135,59 @@ class TestCreateConnectorContextManager:
         # DuckDB connections don't have an is_closed property,
         # so we verify by checking the internal state
         assert connector._connection is None
+
+
+class TestSnowflakeAuthenticationValidation:
+    """Tests for Snowflake authentication parameter validation."""
+
+    def test_password_auth_requires_account_user_password(self, connector: DuckDBConnector):
+        """Test that password auth requires account, user, and password."""
+        with pytest.raises(ValueError, match="requires account, user, and password"):
+            connector.attach_snowflake("sf", account="myaccount", user="myuser")
+
+        with pytest.raises(ValueError, match="requires account, user, and password"):
+            connector.attach_snowflake("sf", account="myaccount", password="mypass")
+
+        with pytest.raises(ValueError, match="requires account, user, and password"):
+            connector.attach_snowflake("sf", user="myuser", password="mypass")
+
+    def test_externalbrowser_auth_requires_only_account(self, connector: DuckDBConnector):
+        """Test that externalbrowser auth only requires account."""
+        # Should not raise for account-only with externalbrowser
+        # (actual connection will fail, but validation passes)
+        with pytest.raises(Exception) as exc_info:
+            # This will fail at the ATTACH stage, not validation
+            connector.attach_snowflake("sf", account="myaccount", authenticator="externalbrowser")
+
+        # Verify it's not a validation error - it should fail later during connection
+        assert "requires account" not in str(exc_info.value).lower()
+
+    def test_externalbrowser_auth_missing_account_raises(self, connector: DuckDBConnector):
+        """Test that externalbrowser auth without account raises."""
+        with pytest.raises(ValueError, match="external browser authentication requires account"):
+            connector.attach_snowflake("sf", authenticator="externalbrowser")
+
+    def test_key_pair_auth_requires_account_user_private_key(self, connector: DuckDBConnector):
+        """Test that key_pair auth requires account, user, and private_key_path."""
+        with pytest.raises(ValueError, match="key_pair authentication requires"):
+            connector.attach_snowflake("sf", account="myaccount", authenticator="key_pair")
+
+        with pytest.raises(ValueError, match="key_pair authentication requires"):
+            connector.attach_snowflake(
+                "sf", account="myaccount", user="myuser", authenticator="key_pair"
+            )
+
+    def test_authenticator_case_insensitive(self, connector: DuckDBConnector):
+        """Test that authenticator values are case-insensitive."""
+        # Both should fail at connection, not validation
+        for auth in ["EXTERNALBROWSER", "ExternalBrowser", "externalbrowser"]:
+            with pytest.raises(Exception) as exc_info:
+                connector.attach_snowflake("sf", account="myaccount", authenticator=auth)
+            assert "requires account" not in str(exc_info.value).lower()
+
+    def test_ext_browser_alias(self, connector: DuckDBConnector):
+        """Test that ext_browser is accepted as alias for externalbrowser."""
+        with pytest.raises(Exception) as exc_info:
+            connector.attach_snowflake("sf", account="myaccount", authenticator="ext_browser")
+        # Should not be a validation error
+        assert "requires account" not in str(exc_info.value).lower()

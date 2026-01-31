@@ -102,6 +102,11 @@ class SnowflakeConfig(BaseSettings):
     1. Explicit parameters (account, user, password, etc.)
     2. Environment variables (QUACK_DIFF_SNOWFLAKE_*)
     3. connection_name -> reads from ~/.snowflake/connections.toml
+
+    Authentication methods:
+    - password: Standard username/password (default)
+    - externalbrowser: SSO via web browser (SAML 2.0)
+    - key_pair: RSA key-based authentication
     """
 
     model_config = SettingsConfigDict(env_prefix="QUACK_DIFF_SNOWFLAKE_")
@@ -116,6 +121,12 @@ class SnowflakeConfig(BaseSettings):
         description="Custom path to connections.toml file",
     )
 
+    # Authentication method
+    authenticator: str | None = Field(
+        default=None,
+        description="Auth method: 'password' (default), 'externalbrowser' for SSO, 'key_pair'",
+    )
+
     # Explicit credentials (override connection_name if provided)
     account: str | None = Field(default=None, description="Snowflake account identifier")
     user: str | None = Field(default=None, description="Snowflake username")
@@ -124,6 +135,16 @@ class SnowflakeConfig(BaseSettings):
     schema_name: str | None = Field(default=None, alias="schema", description="Default schema")
     warehouse: str | None = Field(default=None, description="Compute warehouse")
     role: str | None = Field(default=None, description="User role")
+
+    # Key pair authentication
+    private_key_path: Path | None = Field(
+        default=None,
+        description="Path to RSA private key file for key_pair authentication",
+    )
+    private_key_passphrase: str | None = Field(
+        default=None,
+        description="Passphrase for encrypted private key",
+    )
 
     # Private: stores loaded connection data
     _connection_loaded: bool = False
@@ -152,6 +173,12 @@ class SnowflakeConfig(BaseSettings):
                     "warehousename": "warehouse",  # Alternative key
                     "role": "role",
                     "rolename": "role",  # Alternative key
+                    "authenticator": "authenticator",
+                    "private_key_path": "private_key_path",
+                    "privatekey": "private_key_path",  # Alternative key
+                    "private_key": "private_key_path",  # Alternative key
+                    "private_key_passphrase": "private_key_passphrase",
+                    "privatekeypassphrase": "private_key_passphrase",  # Alternative key
                 }
 
                 for toml_key, config_field in field_mapping.items():
@@ -172,8 +199,28 @@ class SnowflakeConfig(BaseSettings):
         return self
 
     def is_configured(self) -> bool:
-        """Check if minimum required settings are provided."""
-        return all([self.account, self.user, self.password])
+        """Check if minimum required settings are provided.
+
+        Requirements vary by authentication method:
+        - password (default): account, user, password
+        - externalbrowser: account only (user optional, browser handles auth)
+        - key_pair: account, user, private_key_path
+        """
+        if not self.account:
+            return False
+
+        auth_method = (self.authenticator or "").lower()
+
+        # External browser SSO - only account required
+        if auth_method in ("externalbrowser", "ext_browser"):
+            return True
+
+        # Key pair authentication
+        if auth_method == "key_pair":
+            return all([self.user, self.private_key_path])
+
+        # Password authentication (default)
+        return all([self.user, self.password])
 
 
 class DiffDefaults(BaseSettings):
