@@ -176,35 +176,6 @@ class SnowflakeConfig(BaseSettings):
         return all([self.account, self.user, self.password])
 
 
-class PostgresConfig(BaseSettings):
-    """PostgreSQL connection configuration."""
-
-    model_config = SettingsConfigDict(env_prefix="QUACK_DIFF_POSTGRES_")
-
-    connection_string: str | None = Field(
-        default=None,
-        description="PostgreSQL connection string (postgresql://user:pass@host:port/db)",
-    )
-    host: str | None = Field(default=None, description="PostgreSQL host")
-    port: int = Field(default=5432, description="PostgreSQL port")
-    user: str | None = Field(default=None, description="PostgreSQL username")
-    password: str | None = Field(default=None, description="PostgreSQL password")
-    database: str | None = Field(default=None, description="PostgreSQL database name")
-
-    def get_connection_string(self) -> str | None:
-        """Build or return the connection string."""
-        if self.connection_string:
-            return self.connection_string
-        if all([self.host, self.user, self.database]):
-            pwd = f":{self.password}" if self.password else ""
-            return f"postgresql://{self.user}{pwd}@{self.host}:{self.port}/{self.database}"
-        return None
-
-    def is_configured(self) -> bool:
-        """Check if minimum required settings are provided."""
-        return self.get_connection_string() is not None
-
-
 class DiffDefaults(BaseSettings):
     """Default settings for diff operations."""
 
@@ -246,7 +217,6 @@ class Settings(BaseSettings):
 
     # Database configurations
     snowflake: SnowflakeConfig = Field(default_factory=SnowflakeConfig)
-    postgres: PostgresConfig = Field(default_factory=PostgresConfig)
 
     # Diff defaults
     defaults: DiffDefaults = Field(default_factory=DiffDefaults)

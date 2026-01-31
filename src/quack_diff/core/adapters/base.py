@@ -22,9 +22,6 @@ class Dialect(str, Enum):
 
     DUCKDB = "duckdb"
     SNOWFLAKE = "snowflake"
-    POSTGRES = "postgres"
-    MYSQL = "mysql"
-    SQLITE = "sqlite"
 
 
 class BaseAdapter(ABC):
@@ -188,7 +185,6 @@ def get_adapter(dialect: Dialect | str) -> BaseAdapter:
     """
     # Import here to avoid circular imports
     from quack_diff.core.adapters.duckdb import DuckDBAdapter
-    from quack_diff.core.adapters.postgres import PostgresAdapter
     from quack_diff.core.adapters.snowflake import SnowflakeAdapter
 
     if isinstance(dialect, str):
@@ -197,7 +193,6 @@ def get_adapter(dialect: Dialect | str) -> BaseAdapter:
     adapters: dict[Dialect, type[BaseAdapter]] = {
         Dialect.DUCKDB: DuckDBAdapter,
         Dialect.SNOWFLAKE: SnowflakeAdapter,
-        Dialect.POSTGRES: PostgresAdapter,
     }
 
     adapter_class = adapters.get(dialect)

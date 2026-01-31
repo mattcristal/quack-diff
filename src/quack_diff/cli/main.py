@@ -286,7 +286,7 @@ def attach(
         typer.Option(
             "--type",
             "-t",
-            help="Database type (snowflake, postgres, duckdb)",
+            help="Database type (snowflake, duckdb)",
         ),
     ] = "duckdb",
     path: Annotated[
@@ -294,14 +294,7 @@ def attach(
         typer.Option(
             "--path",
             "-p",
-            help="Path to database file (for DuckDB/SQLite)",
-        ),
-    ] = None,
-    connection_string: Annotated[
-        str | None,
-        typer.Option(
-            "--connection-string",
-            help="Connection string (for Postgres)",
+            help="Path to database file (for DuckDB)",
         ),
     ] = None,
     config_file: Annotated[
@@ -332,12 +325,6 @@ def attach(
                     print_error("--path is required for DuckDB databases")
                     raise typer.Exit(2)
                 connector.attach_duckdb(name, path)
-
-            elif dialect == Dialect.POSTGRES:
-                if connection_string:
-                    connector.attach_postgres(name, connection_string=connection_string)
-                else:
-                    connector.attach_postgres(name)
 
             elif dialect == Dialect.SNOWFLAKE:
                 connector.attach_snowflake(name)
