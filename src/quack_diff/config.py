@@ -223,6 +223,48 @@ class SnowflakeConfig(BaseSettings):
         return all([self.user, self.password])
 
 
+class DatabaseConfig(BaseSettings):
+    """Configuration for an attached database.
+
+    Supports multiple database types:
+    - snowflake: Uses global snowflake config or explicit connection params
+    - duckdb: Attaches a local DuckDB file
+
+    Example YAML:
+        databases:
+          sf:
+            type: snowflake
+            # Uses global snowflake config
+          local:
+            type: duckdb
+            path: ./data/local.duckdb
+    """
+
+    model_config = SettingsConfigDict(extra="allow")
+
+    type: str = Field(
+        default="snowflake",
+        description="Database type: 'snowflake' or 'duckdb'",
+    )
+    path: Path | None = Field(
+        default=None,
+        description="Path to DuckDB database file (for type='duckdb')",
+    )
+    connection_name: str | None = Field(
+        default=None,
+        description="Snowflake connection profile from ~/.snowflake/connections.toml",
+    )
+    # Additional Snowflake fields (override global config)
+    account: str | None = Field(default=None, description="Snowflake account identifier")
+    user: str | None = Field(default=None, description="Snowflake username")
+    password: str | None = Field(default=None, description="Snowflake password")
+    database: str | None = Field(default=None, description="Snowflake database")
+    schema_name: str | None = Field(default=None, alias="schema", description="Snowflake schema")
+    warehouse: str | None = Field(default=None, description="Snowflake warehouse")
+    role: str | None = Field(default=None, description="Snowflake role")
+    authenticator: str | None = Field(default=None, description="Authentication method")
+
+
 class DiffDefaults(BaseSettings):
     """Default settings for diff operations."""
 
@@ -264,6 +306,12 @@ class Settings(BaseSettings):
 
     # Database configurations
     snowflake: SnowflakeConfig = Field(default_factory=SnowflakeConfig)
+
+    # Databases to auto-attach (keys are aliases, values are database configs)
+    databases: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Databases to auto-attach. Keys are aliases, values are database configs.",
+    )
 
     # Diff defaults
     defaults: DiffDefaults = Field(default_factory=DiffDefaults)

@@ -21,6 +21,52 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _parse_offset_to_seconds(offset: str) -> int:
+    """Parse a human-readable time offset to seconds.
+
+    Supports formats like:
+    - "5 minutes ago"
+    - "1 hour ago"
+    - "30 seconds ago"
+
+    Args:
+        offset: Human-readable offset string
+
+    Returns:
+        Number of seconds
+
+    Raises:
+        ValueError: If offset format is not recognized
+    """
+    import re
+
+    offset_lower = offset.lower().strip()
+
+    # Remove "ago" suffix if present
+    offset_lower = offset_lower.replace(" ago", "").strip()
+
+    # Parse number and unit
+    match = re.match(r"(\d+)\s*(second|minute|hour|day|week)s?", offset_lower)
+    if not match:
+        raise ValueError(
+            f"Could not parse offset: {offset}. "
+            "Expected format like '5 minutes ago' or '1 hour ago'"
+        )
+
+    value = int(match.group(1))
+    unit = match.group(2)
+
+    multipliers = {
+        "second": 1,
+        "minute": 60,
+        "hour": 3600,
+        "day": 86400,
+        "week": 604800,
+    }
+
+    return value * multipliers[unit]
+
+
 class DatabaseType(str, Enum):
     """Supported database types."""
 
@@ -103,15 +149,19 @@ class DuckDBConnector:
         """Context manager exit."""
         self.close()
 
-    def _install_extension(self, extension: str) -> None:
+    def _install_extension(self, extension: str, from_community: bool = False) -> None:
         """Install and load a DuckDB extension if not already loaded.
 
         Args:
             extension: Name of the extension to install
+            from_community: If True, install from community repository
         """
         if extension not in self._installed_extensions:
-            logger.debug(f"Installing extension: {extension}")
-            self.connection.execute(f"INSTALL {extension}")
+            logger.debug(f"Installing extension: {extension} (community: {from_community})")
+            if from_community:
+                self.connection.execute(f"INSTALL {extension} FROM community")
+            else:
+                self.connection.execute(f"INSTALL {extension}")
             self.connection.execute(f"LOAD {extension}")
             self._installed_extensions.add(extension)
 
@@ -210,7 +260,8 @@ class DuckDBConnector:
                     "Provide via parameters, config, connection_name, or environment variables."
                 )
 
-        self._install_extension("snowflake")
+        # Snowflake extension is community-maintained
+        self._install_extension("snowflake", from_community=True)
 
         # Build connection string based on authentication method
         conn_parts = [f"account={account}"]
@@ -243,7 +294,8 @@ class DuckDBConnector:
 
         auth_method_display = auth_type if auth_type else "password"
         logger.info(f"Attaching Snowflake database as '{name}' (auth: {auth_method_display})")
-        self.connection.execute(f"ATTACH '{conn_string}' AS {name} (TYPE snowflake)")
+        # Snowflake extension only supports read-only access
+        self.connection.execute(f"ATTACH '{conn_string}' AS {name} (TYPE snowflake, READ_ONLY)")
 
         attached = AttachedDatabase(
             name=name,
@@ -362,6 +414,158 @@ class DuckDBConnector:
         """
         result = self.execute_fetchone(f"SELECT COUNT(*) FROM {table}")
         return result[0] if result else 0
+
+    def pull_snowflake_table(
+        self,
+        table_name: str,
+        local_name: str,
+        timestamp: str | None = None,
+        offset: str | None = None,
+        account: str | None = None,
+        user: str | None = None,
+        password: str | None = None,
+        database: str | None = None,
+        schema: str | None = None,
+        warehouse: str | None = None,
+        role: str | None = None,
+        authenticator: str | None = None,
+        connection_name: str | None = None,
+        config: SnowflakeConfig | None = None,
+    ) -> str:
+        """Pull a Snowflake table into DuckDB using native Snowflake connector.
+
+        This method uses snowflake-connector-python directly instead of the
+        DuckDB Snowflake extension. This provides better compatibility,
+        supports time-travel queries, and avoids virtual column errors.
+
+        Args:
+            table_name: Snowflake table name (e.g., "SCHEMA.TABLE" or just "TABLE")
+            local_name: Local table name in DuckDB
+            timestamp: Time-travel timestamp (e.g., "2024-01-15 10:30:00")
+            offset: Time-travel offset (e.g., "5 minutes ago", "1 hour ago")
+            account: Snowflake account identifier
+            user: Snowflake username
+            password: Snowflake password
+            database: Snowflake database name
+            schema: Snowflake schema name
+            warehouse: Compute warehouse
+            role: User role
+            authenticator: Authentication method
+            connection_name: Connection profile from ~/.snowflake/connections.toml
+            config: SnowflakeConfig instance
+
+        Returns:
+            The local table name where data was loaded
+
+        Raises:
+            ImportError: If snowflake-connector-python is not installed
+            ValueError: If required parameters are missing
+        """
+        try:
+            import snowflake.connector
+        except ImportError as e:
+            raise ImportError(
+                "snowflake-connector-python is required for pull_snowflake_table. "
+                "Install it with: pip install snowflake-connector-python"
+            ) from e
+
+        # If connection_name provided, create a config from it
+        if connection_name is not None and config is None:
+            from quack_diff.config import SnowflakeConfig as SFConfig
+
+            config = SFConfig(connection_name=connection_name)
+
+        # Use config or settings if parameters not provided
+        if config is None and self._settings is not None:
+            config = self._settings.snowflake
+
+        if config is not None:
+            account = account or config.account
+            user = user or config.user
+            password = password or config.password
+            database = database or config.database
+            schema = schema or config.schema_name
+            warehouse = warehouse or config.warehouse
+            role = role or config.role
+            authenticator = authenticator or config.authenticator
+
+        # Normalize authenticator value
+        auth_type = (authenticator or "").lower()
+
+        # Build connection parameters for snowflake.connector
+        conn_params: dict[str, Any] = {"account": account}
+
+        if auth_type in ("externalbrowser", "ext_browser"):
+            conn_params["authenticator"] = "externalbrowser"
+            if user:
+                conn_params["user"] = user
+        else:
+            # Password authentication (default)
+            if not all([account, user, password]):
+                raise ValueError(
+                    "Snowflake connection requires account, user, and password. "
+                    "Provide via parameters, config, connection_name, or environment variables."
+                )
+            conn_params["user"] = user
+            conn_params["password"] = password
+
+        if database:
+            conn_params["database"] = database
+        if schema:
+            conn_params["schema"] = schema
+        if warehouse:
+            conn_params["warehouse"] = warehouse
+        if role:
+            conn_params["role"] = role
+
+        # Build the query with optional time-travel
+        query = f"SELECT * FROM {table_name}"
+        if timestamp:
+            query = f"SELECT * FROM {table_name} AT (TIMESTAMP => '{timestamp}'::TIMESTAMP_LTZ)"
+        elif offset:
+            # Parse offset like "5 minutes ago" -> OFFSET => -300
+            query = f"SELECT * FROM {table_name} AT (OFFSET => -{_parse_offset_to_seconds(offset)})"
+
+        logger.info(f"Pulling Snowflake table {table_name} to local table {local_name}")
+        logger.debug(f"Query: {query}")
+
+        # Connect to Snowflake and fetch data
+        with snowflake.connector.connect(**conn_params) as sf_conn:
+            cursor = sf_conn.cursor()
+            try:
+                cursor.execute(query)
+
+                # Try Arrow fetch first (most efficient)
+                try:
+                    arrow_table = cursor.fetch_arrow_all()
+                    if arrow_table is not None:
+                        self.connection.execute(
+                            f"CREATE OR REPLACE TABLE {local_name} AS SELECT * FROM arrow_table"
+                        )
+                        logger.debug(f"Loaded {arrow_table.num_rows} rows via Arrow")
+                        return local_name
+                except Exception as arrow_err:
+                    logger.debug(f"Arrow fetch failed, falling back to pandas: {arrow_err}")
+
+                # Fallback to pandas
+                try:
+                    import pandas  # noqa: F401 - ensures pandas is installed
+
+                    df = cursor.fetch_pandas_all()
+                    self.connection.execute(
+                        f"CREATE OR REPLACE TABLE {local_name} AS SELECT * FROM df"
+                    )
+                    logger.debug(f"Loaded {len(df)} rows via pandas")
+                    return local_name
+                except ImportError as err:
+                    raise ImportError(
+                        "pandas is required for Snowflake data transfer when Arrow fails. "
+                        "Install it with: pip install pandas"
+                    ) from err
+            finally:
+                cursor.close()
+
+        return local_name
 
     @property
     def attached_databases(self) -> dict[str, AttachedDatabase]:
