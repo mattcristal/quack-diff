@@ -1,6 +1,5 @@
 """Tests for the data differ module."""
 
-
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.differ import (
     ColumnInfo,
@@ -241,9 +240,7 @@ class TestDiffResult:
             source_row_count=100,
             target_row_count=100,
             schema_comparison=SchemaComparisonResult([], []),
-            differences=[
-                RowDiff(key=i, diff_type=DiffType.MODIFIED) for i in range(10)
-            ],
+            differences=[RowDiff(key=i, diff_type=DiffType.MODIFIED) for i in range(10)],
             threshold=0.05,  # 5% threshold
         )
 

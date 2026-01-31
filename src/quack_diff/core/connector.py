@@ -152,6 +152,7 @@ class DuckDBConnector:
         # If connection_name provided, create a config from it
         if connection_name is not None and config is None:
             from quack_diff.config import SnowflakeConfig as SFConfig
+
             config = SFConfig(connection_name=connection_name)
 
         # Use config or settings if parameters not provided
@@ -190,9 +191,7 @@ class DuckDBConnector:
         conn_string = ";".join(conn_parts)
 
         logger.info(f"Attaching Snowflake database as '{name}'")
-        self.connection.execute(
-            f"ATTACH '{conn_string}' AS {name} (TYPE snowflake)"
-        )
+        self.connection.execute(f"ATTACH '{conn_string}' AS {name} (TYPE snowflake)")
 
         attached = AttachedDatabase(
             name=name,
@@ -252,9 +251,7 @@ class DuckDBConnector:
         self._install_extension("postgres")
 
         logger.info(f"Attaching PostgreSQL database as '{name}'")
-        self.connection.execute(
-            f"ATTACH '{connection_string}' AS {name} (TYPE postgres)"
-        )
+        self.connection.execute(f"ATTACH '{connection_string}' AS {name} (TYPE postgres)")
 
         attached = AttachedDatabase(
             name=name,
