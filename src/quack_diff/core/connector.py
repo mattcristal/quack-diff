@@ -1,7 +1,7 @@
-"""DuckDB connection manager with external database attachment support.
+"""DuckDB connection manager with external database support.
 
-Uses DuckDB's extension system to connect to external databases like
-Snowflake, treating them as local tables for querying.
+Provides DuckDB connectivity and the ability to pull data from external
+databases like Snowflake using native connectors.
 """
 
 from __future__ import annotations
@@ -68,10 +68,9 @@ def _parse_offset_to_seconds(offset: str) -> int:
 
 
 class DatabaseType(str, Enum):
-    """Supported database types."""
+    """Supported database types for attachment."""
 
     DUCKDB = "duckdb"
-    SNOWFLAKE = "snowflake"
 
 
 @dataclass
@@ -87,19 +86,20 @@ class AttachedDatabase:
 class DuckDBConnector:
     """Manages DuckDB connections and external database attachments.
 
-    This class acts as a "universal adapter" by leveraging DuckDB's
-    extension system to connect to various databases.
+    This class provides connectivity to DuckDB and external databases.
+    For Snowflake, use pull_snowflake_table() which uses the native
+    Snowflake connector for better compatibility and time-travel support.
 
     Example:
-        Password authentication:
+        Pull Snowflake table locally:
         >>> connector = DuckDBConnector()
-        >>> connector.attach_snowflake("sf", account="...", user="...", password="...")
-        >>> result = connector.execute("SELECT * FROM sf.schema.table LIMIT 10")
+        >>> connector.pull_snowflake_table("SCHEMA.TABLE", "local_table", offset="5 minutes ago")
+        >>> result = connector.execute("SELECT * FROM local_table LIMIT 10")
 
-        External browser SSO authentication:
+        Attach another DuckDB file:
         >>> connector = DuckDBConnector()
-        >>> connector.attach_snowflake("sf", account="...", authenticator="externalbrowser")
-        >>> result = connector.execute("SELECT * FROM sf.schema.table LIMIT 10")
+        >>> connector.attach_duckdb("other", "/path/to/other.duckdb")
+        >>> result = connector.execute("SELECT * FROM other.schema.table LIMIT 10")
     """
 
     def __init__(
@@ -120,7 +120,6 @@ class DuckDBConnector:
         self._settings = settings
         self._connection: duckdb.DuckDBPyConnection | None = None
         self._attached_databases: dict[str, AttachedDatabase] = {}
-        self._installed_extensions: set[str] = set()
 
     @property
     def connection(self) -> duckdb.DuckDBPyConnection:
@@ -148,167 +147,6 @@ class DuckDBConnector:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Context manager exit."""
         self.close()
-
-    def _install_extension(self, extension: str, from_community: bool = False) -> None:
-        """Install and load a DuckDB extension if not already loaded.
-
-        Args:
-            extension: Name of the extension to install
-            from_community: If True, install from community repository
-        """
-        if extension not in self._installed_extensions:
-            logger.debug(f"Installing extension: {extension} (community: {from_community})")
-            if from_community:
-                self.connection.execute(f"INSTALL {extension} FROM community")
-            else:
-                self.connection.execute(f"INSTALL {extension}")
-            self.connection.execute(f"LOAD {extension}")
-            self._installed_extensions.add(extension)
-
-    def attach_snowflake(
-        self,
-        name: str,
-        account: str | None = None,
-        user: str | None = None,
-        password: str | None = None,
-        database: str | None = None,
-        warehouse: str | None = None,
-        role: str | None = None,
-        authenticator: str | None = None,
-        private_key_path: str | None = None,
-        private_key_passphrase: str | None = None,
-        config: SnowflakeConfig | None = None,
-        connection_name: str | None = None,
-    ) -> AttachedDatabase:
-        """Attach a Snowflake database.
-
-        Credentials can be provided in multiple ways (in priority order):
-        1. Explicit parameters (account, user, password, authenticator, etc.)
-        2. config parameter (SnowflakeConfig instance)
-        3. connection_name -> reads from ~/.snowflake/connections.toml
-        4. Settings from environment variables
-
-        Supported authentication methods:
-        - password (default): Standard username/password
-        - externalbrowser: SSO via web browser (SAML 2.0)
-        - key_pair: RSA key-based authentication
-
-        Args:
-            name: Alias for the attached database
-            account: Snowflake account identifier
-            user: Snowflake username
-            password: Snowflake password
-            database: Snowflake database name
-            warehouse: Compute warehouse (optional)
-            role: User role (optional)
-            authenticator: Authentication method ('password', 'externalbrowser', 'key_pair')
-            private_key_path: Path to RSA private key for key_pair auth
-            private_key_passphrase: Passphrase for encrypted private key
-            config: SnowflakeConfig instance (alternative to individual params)
-            connection_name: Connection profile from ~/.snowflake/connections.toml
-
-        Returns:
-            AttachedDatabase instance
-
-        Raises:
-            ValueError: If required parameters are missing
-        """
-        # If connection_name provided, create a config from it
-        if connection_name is not None and config is None:
-            from quack_diff.config import SnowflakeConfig as SFConfig
-
-            config = SFConfig(connection_name=connection_name)
-
-        # Use config or settings if parameters not provided
-        if config is None and self._settings is not None:
-            config = self._settings.snowflake
-
-        if config is not None:
-            account = account or config.account
-            user = user or config.user
-            password = password or config.password
-            database = database or config.database
-            warehouse = warehouse or config.warehouse
-            role = role or config.role
-            authenticator = authenticator or config.authenticator
-            if config.private_key_path:
-                private_key_path = private_key_path or str(config.private_key_path)
-            private_key_passphrase = private_key_passphrase or config.private_key_passphrase
-
-        # Normalize authenticator value
-        auth_type = (authenticator or "").lower()
-
-        # Validate required parameters based on authentication method
-        if auth_type in ("externalbrowser", "ext_browser"):
-            if not account:
-                raise ValueError(
-                    "Snowflake external browser authentication requires account. "
-                    "Provide via parameters, config, connection_name, or environment variables."
-                )
-        elif auth_type == "key_pair":
-            if not all([account, user, private_key_path]):
-                raise ValueError(
-                    "Snowflake key_pair authentication requires account, user, and "
-                    "private_key_path. Provide via parameters, config, connection_name, "
-                    "or environment variables."
-                )
-        else:
-            # Default to password authentication
-            if not all([account, user, password]):
-                raise ValueError(
-                    "Snowflake connection requires account, user, and password. "
-                    "Provide via parameters, config, connection_name, or environment variables."
-                )
-
-        # Snowflake extension is community-maintained
-        self._install_extension("snowflake", from_community=True)
-
-        # Build connection string based on authentication method
-        conn_parts = [f"account={account}"]
-
-        if auth_type in ("externalbrowser", "ext_browser"):
-            # External browser SSO - use ext_browser auth type
-            conn_parts.append("auth_type=ext_browser")
-            if user:
-                conn_parts.append(f"user={user}")
-        elif auth_type == "key_pair":
-            # Key pair authentication
-            conn_parts.append(f"user={user}")
-            conn_parts.append("auth_type=key_pair")
-            conn_parts.append(f"private_key={private_key_path}")
-            if private_key_passphrase:
-                conn_parts.append(f"private_key_passphrase={private_key_passphrase}")
-        else:
-            # Password authentication (default)
-            conn_parts.append(f"user={user}")
-            conn_parts.append(f"password={password}")
-
-        if database:
-            conn_parts.append(f"database={database}")
-        if warehouse:
-            conn_parts.append(f"warehouse={warehouse}")
-        if role:
-            conn_parts.append(f"role={role}")
-
-        conn_string = ";".join(conn_parts)
-
-        auth_method_display = auth_type if auth_type else "password"
-        logger.info(f"Attaching Snowflake database as '{name}' (auth: {auth_method_display})")
-        # Snowflake extension only supports read-only access
-        self.connection.execute(f"ATTACH '{conn_string}' AS {name} (TYPE snowflake, READ_ONLY)")
-
-        attached = AttachedDatabase(
-            name=name,
-            db_type=DatabaseType.SNOWFLAKE,
-            attached=True,
-            metadata={
-                "account": account,
-                "database": database,
-                "authenticator": auth_method_display,
-            },
-        )
-        self._attached_databases[name] = attached
-        return attached
 
     def attach_duckdb(self, name: str, path: str, read_only: bool = True) -> AttachedDatabase:
         """Attach another DuckDB database file.

@@ -76,10 +76,13 @@ def _auto_attach_databases(
     target: str,
     verbose: bool = False,
 ) -> None:
-    """Auto-attach databases based on config and table references.
+    """Auto-attach DuckDB databases based on config and table references.
 
-    Attaches databases from settings.databases config for any aliases
+    Attaches DuckDB databases from settings.databases config for any aliases
     found in source/target table references.
+
+    Note: Snowflake tables are handled separately via pull_snowflake_table(),
+    not through attachment.
 
     Args:
         connector: DuckDB connector
@@ -105,7 +108,7 @@ def _auto_attach_databases(
         # Check if alias is in databases config
         if alias in settings.databases:
             db_config = settings.databases[alias]
-            db_type = db_config.get("type", "snowflake").lower()
+            db_type = db_config.get("type", "duckdb").lower()
 
             if db_type == "duckdb":
                 path = db_config.get("path")
@@ -113,30 +116,6 @@ def _auto_attach_databases(
                     if verbose:
                         print_info(f"Attaching DuckDB database: {path} as '{alias}'")
                     connector.attach_duckdb(alias, str(path))
-            elif db_type == "snowflake":
-                if verbose:
-                    print_info(f"Attaching Snowflake database as '{alias}'")
-                # Use config from databases section, falling back to global snowflake config
-                connector.attach_snowflake(
-                    name=alias,
-                    account=db_config.get("account"),
-                    user=db_config.get("user"),
-                    password=db_config.get("password"),
-                    database=db_config.get("database"),
-                    warehouse=db_config.get("warehouse"),
-                    role=db_config.get("role"),
-                    authenticator=db_config.get("authenticator"),
-                    connection_name=db_config.get("connection_name"),
-                )
-
-        # Fall back to global snowflake config for sf/snowflake aliases
-        elif alias in ("sf", "snowflake"):
-            if settings.snowflake.is_configured():
-                if verbose:
-                    print_info(f"Attaching Snowflake database as '{alias}'")
-                connector.attach_snowflake(name=alias, config=settings.snowflake)
-            else:
-                logger.warning(f"Snowflake alias '{alias}' found but no Snowflake config available")
 
 
 def _pull_snowflake_tables(
