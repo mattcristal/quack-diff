@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -12,6 +13,234 @@ from quack_diff.cli.formatters import print_diff_result
 from quack_diff.config import get_settings
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.differ import DataDiffer
+
+if TYPE_CHECKING:
+    from quack_diff.config import Settings
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_table_reference(table: str) -> tuple[str | None, str]:
+    """Parse a table reference to extract alias and table name.
+
+    Args:
+        table: Table reference (e.g., "sf.SCHEMA.TABLE" or "SCHEMA.TABLE")
+
+    Returns:
+        Tuple of (alias, table_name). Alias is None if not present.
+    """
+    parts = table.split(".", 1)
+    if len(parts) == 2 and parts[0].lower() in ("sf", "snowflake"):
+        # Has a recognized alias prefix
+        return parts[0].lower(), parts[1]
+
+    # Check if first part is a configured database alias
+    # For now, just check common patterns
+    if len(parts) >= 2:
+        first_part = parts[0].lower()
+        # Return as potential alias if it's short (likely an alias)
+        if len(first_part) <= 4 and first_part.isalpha():
+            return first_part, ".".join(parts[1:])
+
+    return None, table
+
+
+def _is_snowflake_table(table: str, settings: Settings) -> bool:
+    """Check if a table reference points to a Snowflake table.
+
+    Args:
+        table: Table reference
+        settings: Application settings
+
+    Returns:
+        True if this is a Snowflake table
+    """
+    alias, _ = _parse_table_reference(table)
+
+    # Check explicit sf/snowflake prefix
+    if alias in ("sf", "snowflake"):
+        return True
+
+    # Check if alias is configured as snowflake in databases config
+    if alias and alias in settings.databases:
+        db_config = settings.databases[alias]
+        return db_config.get("type", "snowflake").lower() == "snowflake"
+
+    return False
+
+
+def _auto_attach_databases(
+    connector: DuckDBConnector,
+    settings: Settings,
+    source: str,
+    target: str,
+    verbose: bool = False,
+) -> None:
+    """Auto-attach databases based on config and table references.
+
+    Attaches databases from settings.databases config for any aliases
+    found in source/target table references.
+
+    Args:
+        connector: DuckDB connector
+        settings: Application settings
+        source: Source table reference
+        target: Target table reference
+        verbose: Enable verbose output
+    """
+    # Collect unique aliases from table references
+    aliases_to_attach: set[str] = set()
+
+    for table in (source, target):
+        alias, _ = _parse_table_reference(table)
+        if alias:
+            aliases_to_attach.add(alias)
+
+    # Attach each database
+    for alias in aliases_to_attach:
+        if alias in connector.attached_databases:
+            logger.debug(f"Database '{alias}' already attached")
+            continue
+
+        # Check if alias is in databases config
+        if alias in settings.databases:
+            db_config = settings.databases[alias]
+            db_type = db_config.get("type", "snowflake").lower()
+
+            if db_type == "duckdb":
+                path = db_config.get("path")
+                if path:
+                    if verbose:
+                        print_info(f"Attaching DuckDB database: {path} as '{alias}'")
+                    connector.attach_duckdb(alias, str(path))
+            elif db_type == "snowflake":
+                if verbose:
+                    print_info(f"Attaching Snowflake database as '{alias}'")
+                # Use config from databases section, falling back to global snowflake config
+                connector.attach_snowflake(
+                    name=alias,
+                    account=db_config.get("account"),
+                    user=db_config.get("user"),
+                    password=db_config.get("password"),
+                    database=db_config.get("database"),
+                    warehouse=db_config.get("warehouse"),
+                    role=db_config.get("role"),
+                    authenticator=db_config.get("authenticator"),
+                    connection_name=db_config.get("connection_name"),
+                )
+
+        # Fall back to global snowflake config for sf/snowflake aliases
+        elif alias in ("sf", "snowflake"):
+            if settings.snowflake.is_configured():
+                if verbose:
+                    print_info(f"Attaching Snowflake database as '{alias}'")
+                connector.attach_snowflake(name=alias, config=settings.snowflake)
+            else:
+                logger.warning(f"Snowflake alias '{alias}' found but no Snowflake config available")
+
+
+def _pull_snowflake_tables(
+    connector: DuckDBConnector,
+    settings: Settings,
+    source: str,
+    target: str,
+    source_timestamp: str | None = None,
+    source_offset: str | None = None,
+    target_timestamp: str | None = None,
+    target_offset: str | None = None,
+    verbose: bool = False,
+) -> tuple[str, str]:
+    """Pull Snowflake tables into local DuckDB tables using native connector.
+
+    This approach uses snowflake-connector-python directly, which provides:
+    - Support for time-travel queries via Snowflake's AT syntax
+    - Better compatibility (avoids virtual column errors)
+    - No dependency on ADBC driver
+
+    Args:
+        connector: DuckDB connector
+        settings: Application settings
+        source: Source table reference
+        target: Target table reference
+        source_timestamp: Time-travel timestamp for source
+        source_offset: Time-travel offset for source
+        target_timestamp: Time-travel timestamp for target
+        target_offset: Time-travel offset for target
+        verbose: Enable verbose output
+
+    Returns:
+        Tuple of (source_local_name, target_local_name)
+    """
+    source_local = "__source_pulled"
+    target_local = "__target_pulled"
+
+    # Pull source table
+    source_alias, source_table = _parse_table_reference(source)
+    if source_alias and _is_snowflake_table(source, settings):
+        if verbose:
+            time_travel = ""
+            if source_timestamp:
+                time_travel = f" AT {source_timestamp}"
+            elif source_offset:
+                time_travel = f" AT {source_offset}"
+            print_info(f"Pulling Snowflake table: {source_table}{time_travel}")
+
+        # Get connection config
+        config = None
+        if source_alias in settings.databases:
+            db_config = settings.databases[source_alias]
+            connection_name = db_config.get("connection_name")
+            if connection_name:
+                from quack_diff.config import SnowflakeConfig
+
+                config = SnowflakeConfig(connection_name=connection_name)
+        if config is None:
+            config = settings.snowflake
+
+        connector.pull_snowflake_table(
+            table_name=source_table,
+            local_name=source_local,
+            timestamp=source_timestamp,
+            offset=source_offset,
+            config=config,
+        )
+    else:
+        source_local = source
+
+    # Pull target table
+    target_alias, target_table = _parse_table_reference(target)
+    if target_alias and _is_snowflake_table(target, settings):
+        if verbose:
+            time_travel = ""
+            if target_timestamp:
+                time_travel = f" AT {target_timestamp}"
+            elif target_offset:
+                time_travel = f" AT {target_offset}"
+            print_info(f"Pulling Snowflake table: {target_table}{time_travel}")
+
+        # Get connection config
+        config = None
+        if target_alias in settings.databases:
+            db_config = settings.databases[target_alias]
+            connection_name = db_config.get("connection_name")
+            if connection_name:
+                from quack_diff.config import SnowflakeConfig
+
+                config = SnowflakeConfig(connection_name=connection_name)
+        if config is None:
+            config = settings.snowflake
+
+        connector.pull_snowflake_table(
+            table_name=target_table,
+            local_name=target_local,
+            timestamp=target_timestamp,
+            offset=target_offset,
+            config=config,
+        )
+    else:
+        target_local = target
+
+    return source_local, target_local
 
 
 def diff(
@@ -134,6 +363,11 @@ def diff(
             else:
                 target_timestamp = target_at
 
+        # Check if we need to use the Snowflake pull approach
+        use_snowflake_pull = _is_snowflake_table(source, settings) or _is_snowflake_table(
+            target, settings
+        )
+
         # Create connector and differ
         with DuckDBConnector(settings=settings) as connector:
             differ = DataDiffer(
@@ -145,10 +379,35 @@ def diff(
             if verbose:
                 print_info(f"Comparing {source} vs {target}")
 
+            # Determine table names to compare
+            if use_snowflake_pull:
+                # Use native Snowflake connector for pulling data (supports time-travel)
+                source_table_name, target_table_name = _pull_snowflake_tables(
+                    connector=connector,
+                    settings=settings,
+                    source=source,
+                    target=target,
+                    source_timestamp=source_timestamp,
+                    source_offset=source_offset,
+                    target_timestamp=target_timestamp,
+                    target_offset=target_offset,
+                    verbose=verbose,
+                )
+                # Time-travel already applied during pull, so don't pass to diff
+                source_timestamp = None
+                source_offset = None
+                target_timestamp = None
+                target_offset = None
+            else:
+                # Auto-attach databases for non-Snowflake tables
+                _auto_attach_databases(connector, settings, source, target, verbose)
+                source_table_name = source
+                target_table_name = target
+
             # Perform diff
             result = differ.diff(
-                source_table=source,
-                target_table=target,
+                source_table=source_table_name,
+                target_table=target_table_name,
                 key_column=key,
                 columns=column_list,
                 source_timestamp=source_timestamp,
