@@ -45,8 +45,14 @@ class DuckDBConnector:
     extension system to connect to various databases.
 
     Example:
+        Password authentication:
         >>> connector = DuckDBConnector()
         >>> connector.attach_snowflake("sf", account="...", user="...", password="...")
+        >>> result = connector.execute("SELECT * FROM sf.schema.table LIMIT 10")
+
+        External browser SSO authentication:
+        >>> connector = DuckDBConnector()
+        >>> connector.attach_snowflake("sf", account="...", authenticator="externalbrowser")
         >>> result = connector.execute("SELECT * FROM sf.schema.table LIMIT 10")
     """
 
@@ -118,16 +124,24 @@ class DuckDBConnector:
         database: str | None = None,
         warehouse: str | None = None,
         role: str | None = None,
+        authenticator: str | None = None,
+        private_key_path: str | None = None,
+        private_key_passphrase: str | None = None,
         config: SnowflakeConfig | None = None,
         connection_name: str | None = None,
     ) -> AttachedDatabase:
         """Attach a Snowflake database.
 
         Credentials can be provided in multiple ways (in priority order):
-        1. Explicit parameters (account, user, password)
+        1. Explicit parameters (account, user, password, authenticator, etc.)
         2. config parameter (SnowflakeConfig instance)
         3. connection_name -> reads from ~/.snowflake/connections.toml
         4. Settings from environment variables
+
+        Supported authentication methods:
+        - password (default): Standard username/password
+        - externalbrowser: SSO via web browser (SAML 2.0)
+        - key_pair: RSA key-based authentication
 
         Args:
             name: Alias for the attached database
@@ -137,6 +151,9 @@ class DuckDBConnector:
             database: Snowflake database name
             warehouse: Compute warehouse (optional)
             role: User role (optional)
+            authenticator: Authentication method ('password', 'externalbrowser', 'key_pair')
+            private_key_path: Path to RSA private key for key_pair auth
+            private_key_passphrase: Passphrase for encrypted private key
             config: SnowflakeConfig instance (alternative to individual params)
             connection_name: Connection profile from ~/.snowflake/connections.toml
 
@@ -163,21 +180,58 @@ class DuckDBConnector:
             database = database or config.database
             warehouse = warehouse or config.warehouse
             role = role or config.role
+            authenticator = authenticator or config.authenticator
+            if config.private_key_path:
+                private_key_path = private_key_path or str(config.private_key_path)
+            private_key_passphrase = private_key_passphrase or config.private_key_passphrase
 
-        if not all([account, user, password]):
-            raise ValueError(
-                "Snowflake connection requires account, user, and password. "
-                "Provide via parameters, config, connection_name, or environment variables."
-            )
+        # Normalize authenticator value
+        auth_type = (authenticator or "").lower()
+
+        # Validate required parameters based on authentication method
+        if auth_type in ("externalbrowser", "ext_browser"):
+            if not account:
+                raise ValueError(
+                    "Snowflake external browser authentication requires account. "
+                    "Provide via parameters, config, connection_name, or environment variables."
+                )
+        elif auth_type == "key_pair":
+            if not all([account, user, private_key_path]):
+                raise ValueError(
+                    "Snowflake key_pair authentication requires account, user, and "
+                    "private_key_path. Provide via parameters, config, connection_name, "
+                    "or environment variables."
+                )
+        else:
+            # Default to password authentication
+            if not all([account, user, password]):
+                raise ValueError(
+                    "Snowflake connection requires account, user, and password. "
+                    "Provide via parameters, config, connection_name, or environment variables."
+                )
 
         self._install_extension("snowflake")
 
-        # Build connection string
-        conn_parts = [
-            f"account={account}",
-            f"user={user}",
-            f"password={password}",
-        ]
+        # Build connection string based on authentication method
+        conn_parts = [f"account={account}"]
+
+        if auth_type in ("externalbrowser", "ext_browser"):
+            # External browser SSO - use ext_browser auth type
+            conn_parts.append("auth_type=ext_browser")
+            if user:
+                conn_parts.append(f"user={user}")
+        elif auth_type == "key_pair":
+            # Key pair authentication
+            conn_parts.append(f"user={user}")
+            conn_parts.append("auth_type=key_pair")
+            conn_parts.append(f"private_key={private_key_path}")
+            if private_key_passphrase:
+                conn_parts.append(f"private_key_passphrase={private_key_passphrase}")
+        else:
+            # Password authentication (default)
+            conn_parts.append(f"user={user}")
+            conn_parts.append(f"password={password}")
+
         if database:
             conn_parts.append(f"database={database}")
         if warehouse:
@@ -187,14 +241,19 @@ class DuckDBConnector:
 
         conn_string = ";".join(conn_parts)
 
-        logger.info(f"Attaching Snowflake database as '{name}'")
+        auth_method_display = auth_type if auth_type else "password"
+        logger.info(f"Attaching Snowflake database as '{name}' (auth: {auth_method_display})")
         self.connection.execute(f"ATTACH '{conn_string}' AS {name} (TYPE snowflake)")
 
         attached = AttachedDatabase(
             name=name,
             db_type=DatabaseType.SNOWFLAKE,
             attached=True,
-            metadata={"account": account, "database": database},
+            metadata={
+                "account": account,
+                "database": database,
+                "authenticator": auth_method_display,
+            },
         )
         self._attached_databases[name] = attached
         return attached
