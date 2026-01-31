@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import re
+
 from typer.testing import CliRunner
 
 from quack_diff import __version__
 from quack_diff.cli.main import app
 
 runner = CliRunner()
+
+# Pattern to strip ANSI escape codes from output
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return ANSI_PATTERN.sub("", text)
 
 
 class TestCLIHelp:
@@ -38,7 +48,8 @@ class TestCLIHelp:
     def test_help_shows_version_option(self):
         """Test that --help mentions the version option."""
         result = runner.invoke(app, ["--help"])
-        assert "--version" in result.output
+        # Strip ANSI codes as Rich may insert them between characters
+        assert "--version" in strip_ansi(result.output)
 
 
 class TestCLIVersion:
