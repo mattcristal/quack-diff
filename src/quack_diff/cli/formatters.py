@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from rich import box
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -15,11 +17,33 @@ if TYPE_CHECKING:
     from quack_diff.core.differ import DiffResult, SchemaComparisonResult
 
 
-def format_diff_summary(result: DiffResult) -> Panel:
+@dataclass
+class SnowflakeConnectionInfo:
+    """Information about a Snowflake connection used during diff."""
+
+    alias: str  # e.g., "source" or "target"
+    table_name: str
+    account: str | None = None
+    user: str | None = None
+    database: str | None = None
+    schema: str | None = None
+    warehouse: str | None = None
+    role: str | None = None
+    authenticator: str | None = None
+    connection_name: str | None = None
+
+
+def format_diff_summary(
+    result: DiffResult,
+    source_display_name: str | None = None,
+    target_display_name: str | None = None,
+) -> Panel:
     """Create a summary panel for diff results.
 
     Args:
         result: DiffResult to format
+        source_display_name: Optional display name for source table
+        target_display_name: Optional display name for target table
 
     Returns:
         Rich Panel with summary table
@@ -28,13 +52,25 @@ def format_diff_summary(result: DiffResult) -> Panel:
     table.add_column("Label", style="bold")
     table.add_column("Value", justify="right")
 
-    # Row counts
-    table.add_row("Source Table", result.source_table)
-    table.add_row("Target Table", result.target_table)
+    # Row counts - use display names if provided
+    source_name = source_display_name or result.source_table
+    target_name = target_display_name or result.target_table
+    table.add_row("Source Table", source_name)
+    table.add_row("Target Table", target_name)
     table.add_row("", "")  # Spacer
 
     table.add_row("Source Rows", f"{result.source_row_count:,}")
     table.add_row("Target Rows", f"{result.target_row_count:,}")
+
+    # Row difference
+    row_diff = result.target_row_count - result.source_row_count
+    if row_diff > 0:
+        row_diff_text = Text(f"+{row_diff:,}", style="added")
+    elif row_diff < 0:
+        row_diff_text = Text(f"{row_diff:,}", style="removed")
+    else:
+        row_diff_text = Text("0", style="muted")
+    table.add_row("Row Difference", row_diff_text)
     table.add_row("", "")  # Spacer
 
     # Schema status
@@ -201,16 +237,23 @@ def format_schema_comparison(schema: SchemaComparisonResult) -> Panel:
     return Panel(table, title=title, border_style=border_style)
 
 
-def print_diff_result(result: DiffResult, verbose: bool = False) -> None:
+def print_diff_result(
+    result: DiffResult,
+    verbose: bool = False,
+    source_display_name: str | None = None,
+    target_display_name: str | None = None,
+) -> None:
     """Print a complete diff result to the console.
 
     Args:
         result: DiffResult to print
         verbose: Show detailed output including schema
+        source_display_name: Optional display name for source table
+        target_display_name: Optional display name for target table
     """
     # Always show summary
     console.print()
-    console.print(format_diff_summary(result))
+    console.print(format_diff_summary(result, source_display_name, target_display_name))
 
     # Show schema comparison if verbose or there are issues
     if verbose or not result.schema_comparison.is_identical:
@@ -245,4 +288,88 @@ def print_schema_result(schema: SchemaComparisonResult) -> None:
     else:
         console.print("[error]Schemas are not compatible[/error]")
 
+    console.print()
+
+
+def format_snowflake_connections(
+    connections: list[SnowflakeConnectionInfo],
+) -> Panel:
+    """Create a panel showing Snowflake connection details.
+
+    Args:
+        connections: List of SnowflakeConnectionInfo to display
+
+    Returns:
+        Rich Panel with connection details
+    """
+    table = Table(
+        show_header=True,
+        show_lines=True,  # Show horizontal lines between rows
+        box=box.ROUNDED,
+        border_style="bright_blue",
+        header_style="bold black on bright_cyan",
+        padding=(0, 1),
+    )
+    table.add_column("Property", style="bold black", min_width=12)
+
+    # Add a column for each connection
+    for conn in connections:
+        table.add_column(conn.alias.title(), justify="left", style="black")
+
+    # Helper to format values (show dash for missing values)
+    def format_value(value: str | None) -> Text | str:
+        if value is None:
+            return Text("-", style="dim black italic")
+        return Text(str(value), style="black")
+
+    # Connection name (if using connections.toml)
+    values = [format_value(conn.connection_name) for conn in connections]
+    table.add_row("Profile", *values)
+
+    # Account
+    values = [format_value(conn.account) for conn in connections]
+    table.add_row("Account", *values)
+
+    # User
+    values = [format_value(conn.user) for conn in connections]
+    table.add_row("User", *values)
+
+    # Database
+    values = [format_value(conn.database) for conn in connections]
+    table.add_row("Database", *values)
+
+    # Schema
+    values = [format_value(conn.schema) for conn in connections]
+    table.add_row("Schema", *values)
+
+    # Warehouse
+    values = [format_value(conn.warehouse) for conn in connections]
+    table.add_row("Warehouse", *values)
+
+    # Role
+    values = [format_value(conn.role) for conn in connections]
+    table.add_row("Role", *values)
+
+    # Authenticator
+    values = [format_value(conn.authenticator) for conn in connections]
+    table.add_row("Authenticator", *values)
+
+    # Table name
+    values = [Text(conn.table_name, style="black") for conn in connections]
+    table.add_row("Table", *values)
+
+    return Panel(table, title="[bold blue]Snowflake Connection Details", border_style="blue")
+
+
+def print_snowflake_connections(connections: list[SnowflakeConnectionInfo]) -> None:
+    """Print Snowflake connection details to the console.
+
+    Args:
+        connections: List of SnowflakeConnectionInfo to print
+    """
+    if not connections:
+        return
+
+    console.print()
+    console.print(format_snowflake_connections(connections))
     console.print()
