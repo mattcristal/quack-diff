@@ -207,6 +207,10 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# quack-diff local config (may contain connection details)
+quack-diff.yaml
+quack-diff.yml
+
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data

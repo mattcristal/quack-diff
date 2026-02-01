@@ -164,11 +164,13 @@ def _pull_snowflake_tables(
                 time_travel = f" AT {source_offset}"
             print_info(f"Pulling Snowflake table: {source_table}{time_travel}")
 
-        # Get connection config
+        # Get connection config and database override
         config = None
+        source_database = None
         if source_alias in settings.databases:
             db_config = settings.databases[source_alias]
             connection_name = db_config.get("connection_name")
+            source_database = db_config.get("database")
             if connection_name:
                 from quack_diff.config import SnowflakeConfig
 
@@ -182,6 +184,7 @@ def _pull_snowflake_tables(
             timestamp=source_timestamp,
             offset=source_offset,
             config=config,
+            database=source_database,
         )
     else:
         source_local = source
@@ -197,11 +200,13 @@ def _pull_snowflake_tables(
                 time_travel = f" AT {target_offset}"
             print_info(f"Pulling Snowflake table: {target_table}{time_travel}")
 
-        # Get connection config
+        # Get connection config and database override
         config = None
+        target_database = None
         if target_alias in settings.databases:
             db_config = settings.databases[target_alias]
             connection_name = db_config.get("connection_name")
+            target_database = db_config.get("database")
             if connection_name:
                 from quack_diff.config import SnowflakeConfig
 
@@ -215,6 +220,7 @@ def _pull_snowflake_tables(
             timestamp=target_timestamp,
             offset=target_offset,
             config=config,
+            database=target_database,
         )
     else:
         target_local = target
