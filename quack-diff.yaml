@@ -1,0 +1,23 @@
+# quack-diff configuration
+# Maps database aliases to their connection types
+
+# uv run quack-diff diff \
+#   --source uat.INFORMATION_LAYER.dim_deliverypoint \
+#   --target prod.INFORMATION_LAYER.dim_deliverypoint \
+#   --source-at "2026-01-31 12:00:00" \
+#   --target-at "2026-01-31 12:00:00" \
+#   --key DIM_DELIVERYPOINT_KEY \
+#   --verbose
+
+# Databases to auto-attach
+# Keys are the aliases used in table references (e.g., uat.SCHEMA.TABLE)
+databases:
+  uat:
+    type: snowflake
+    connection_name: "eneco.west-europe.azure"
+    database: "DWH_B2B_UAT"
+
+  prod:
+    type: snowflake
+    connection_name: "eneco.west-europe.azure"
+    database: "DWH_B2B"

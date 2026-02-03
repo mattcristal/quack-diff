@@ -172,7 +172,15 @@ def _pull_snowflake_tables(
             if connection_name:
                 from quack_diff.config import SnowflakeConfig
 
-                config = SnowflakeConfig(connection_name=connection_name)
+                # Pass database and other overrides from yaml config to SnowflakeConfig
+                config = SnowflakeConfig(
+                    connection_name=connection_name,
+                    database=db_config.get("database"),
+                    schema=db_config.get("schema"),
+                    warehouse=db_config.get("warehouse"),
+                    role=db_config.get("role"),
+                    authenticator=db_config.get("authenticator"),
+                )
         if config is None:
             config = settings.snowflake
 
@@ -205,7 +213,15 @@ def _pull_snowflake_tables(
             if connection_name:
                 from quack_diff.config import SnowflakeConfig
 
-                config = SnowflakeConfig(connection_name=connection_name)
+                # Pass database and other overrides from yaml config to SnowflakeConfig
+                config = SnowflakeConfig(
+                    connection_name=connection_name,
+                    database=db_config.get("database"),
+                    schema=db_config.get("schema"),
+                    warehouse=db_config.get("warehouse"),
+                    role=db_config.get("role"),
+                    authenticator=db_config.get("authenticator"),
+                )
         if config is None:
             config = settings.snowflake
 
