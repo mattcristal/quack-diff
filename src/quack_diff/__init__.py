@@ -1,4 +1,4 @@
-__version__ = "0.0.5"
+__version__ = "0.0.9"
 __author__ = "Matteo Renoldi"
 
 from quack_diff.core.connector import DuckDBConnector
