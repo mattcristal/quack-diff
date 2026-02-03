@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 
 from quack_diff.cli.console import console, print_error, print_info, print_success
-from quack_diff.cli.formatters import print_diff_result
+from quack_diff.cli.formatters import (
+    SnowflakeConnectionInfo,
+    print_diff_result,
+    print_snowflake_connections,
+)
 from quack_diff.config import get_settings
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.differ import DataDiffer
@@ -128,7 +132,7 @@ def _pull_snowflake_tables(
     target_timestamp: str | None = None,
     target_offset: str | None = None,
     verbose: bool = False,
-) -> tuple[str, str]:
+) -> tuple[str, str, list[SnowflakeConnectionInfo]]:
     """Pull Snowflake tables into local DuckDB tables using native connector.
 
     This approach uses snowflake-connector-python directly, which provides:
@@ -148,10 +152,11 @@ def _pull_snowflake_tables(
         verbose: Enable verbose output
 
     Returns:
-        Tuple of (source_local_name, target_local_name)
+        Tuple of (source_local_name, target_local_name, connection_info_list)
     """
     source_local = "__source_pulled"
     target_local = "__target_pulled"
+    connection_infos: list[SnowflakeConnectionInfo] = []
 
     # Pull source table
     source_alias, source_table = _parse_table_reference(source)
@@ -164,15 +169,18 @@ def _pull_snowflake_tables(
                 time_travel = f" AT {source_offset}"
             print_info(f"Pulling Snowflake table: {source_table}{time_travel}")
 
-        # Get connection config
+        # Get connection config and database override
         config = None
+        source_database = None
+        source_connection_name = None
         if source_alias in settings.databases:
             db_config = settings.databases[source_alias]
-            connection_name = db_config.get("connection_name")
-            if connection_name:
+            source_connection_name = db_config.get("connection_name")
+            source_database = db_config.get("database")
+            if source_connection_name:
                 from quack_diff.config import SnowflakeConfig
 
-                config = SnowflakeConfig(connection_name=connection_name)
+                config = SnowflakeConfig(connection_name=source_connection_name)
         if config is None:
             config = settings.snowflake
 
@@ -182,6 +190,23 @@ def _pull_snowflake_tables(
             timestamp=source_timestamp,
             offset=source_offset,
             config=config,
+            database=source_database,
+        )
+
+        # Collect connection info for display
+        connection_infos.append(
+            SnowflakeConnectionInfo(
+                alias="source",
+                table_name=source_table,
+                account=config.account,
+                user=config.user,
+                database=source_database or config.database,
+                schema=config.schema_name,
+                warehouse=config.warehouse,
+                role=config.role,
+                authenticator=config.authenticator,
+                connection_name=source_connection_name or config.connection_name,
+            )
         )
     else:
         source_local = source
@@ -197,15 +222,18 @@ def _pull_snowflake_tables(
                 time_travel = f" AT {target_offset}"
             print_info(f"Pulling Snowflake table: {target_table}{time_travel}")
 
-        # Get connection config
+        # Get connection config and database override
         config = None
+        target_database = None
+        target_connection_name = None
         if target_alias in settings.databases:
             db_config = settings.databases[target_alias]
-            connection_name = db_config.get("connection_name")
-            if connection_name:
+            target_connection_name = db_config.get("connection_name")
+            target_database = db_config.get("database")
+            if target_connection_name:
                 from quack_diff.config import SnowflakeConfig
 
-                config = SnowflakeConfig(connection_name=connection_name)
+                config = SnowflakeConfig(connection_name=target_connection_name)
         if config is None:
             config = settings.snowflake
 
@@ -215,11 +243,28 @@ def _pull_snowflake_tables(
             timestamp=target_timestamp,
             offset=target_offset,
             config=config,
+            database=target_database,
+        )
+
+        # Collect connection info for display
+        connection_infos.append(
+            SnowflakeConnectionInfo(
+                alias="target",
+                table_name=target_table,
+                account=config.account,
+                user=config.user,
+                database=target_database or config.database,
+                schema=config.schema_name,
+                warehouse=config.warehouse,
+                role=config.role,
+                authenticator=config.authenticator,
+                connection_name=target_connection_name or config.connection_name,
+            )
         )
     else:
         target_local = target
 
-    return source_local, target_local
+    return source_local, target_local, connection_infos
 
 
 def diff(
@@ -298,6 +343,13 @@ def diff(
             help="Show detailed output including schema comparison",
         ),
     ] = False,
+    fail_on_modified: Annotated[
+        bool,
+        typer.Option(
+            "--fail-on-modified",
+            help="Exit with error code if modified rows are found (default: only fail on added/removed)",
+        ),
+    ] = False,
 ) -> None:
     """Compare data between two tables.
 
@@ -343,9 +395,7 @@ def diff(
                 target_timestamp = target_at
 
         # Check if we need to use the Snowflake pull approach
-        use_snowflake_pull = _is_snowflake_table(source, settings) or _is_snowflake_table(
-            target, settings
-        )
+        use_snowflake_pull = _is_snowflake_table(source, settings) or _is_snowflake_table(target, settings)
 
         # Create connector and differ
         with DuckDBConnector(settings=settings) as connector:
@@ -359,9 +409,10 @@ def diff(
                 print_info(f"Comparing {source} vs {target}")
 
             # Determine table names to compare
+            snowflake_connections: list[SnowflakeConnectionInfo] = []
             if use_snowflake_pull:
                 # Use native Snowflake connector for pulling data (supports time-travel)
-                source_table_name, target_table_name = _pull_snowflake_tables(
+                source_table_name, target_table_name, snowflake_connections = _pull_snowflake_tables(
                     connector=connector,
                     settings=settings,
                     source=source,
@@ -377,6 +428,10 @@ def diff(
                 source_offset = None
                 target_timestamp = None
                 target_offset = None
+
+                # Display Snowflake connection details when verbose
+                if verbose and snowflake_connections:
+                    print_snowflake_connections(snowflake_connections)
             else:
                 # Auto-attach databases for non-Snowflake tables
                 _auto_attach_databases(connector, settings, source, target, verbose)
@@ -397,8 +452,13 @@ def diff(
                 limit=limit,
             )
 
-            # Print results
-            print_diff_result(result, verbose=verbose)
+            # Print results with original table names for display
+            print_diff_result(
+                result,
+                verbose=verbose,
+                source_display_name=source,
+                target_display_name=target,
+            )
 
             # Exit with appropriate code
             if result.is_match:
@@ -408,8 +468,20 @@ def diff(
                 print_success(f"Differences within threshold ({threshold * 100:.2f}%)")
                 raise typer.Exit(0)
             else:
-                print_error(f"Found {result.total_differences} differences")
-                raise typer.Exit(1)
+                # Determine if we should fail based on difference types
+                has_added_or_removed = result.added_count > 0 or result.removed_count > 0
+                has_modified = result.modified_count > 0
+
+                # By default, only fail on added/removed rows
+                # With --fail-on-modified, also fail on modified rows
+                should_fail = has_added_or_removed or (fail_on_modified and has_modified)
+
+                if should_fail:
+                    print_error(f"Found {result.total_differences} differences")
+                    raise typer.Exit(1)
+                else:
+                    print_success(f"Found {result.modified_count} modified rows (no added/removed)")
+                    raise typer.Exit(0)
 
     except ValueError as e:
         print_error(str(e))
