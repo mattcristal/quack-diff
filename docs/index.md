@@ -1,14 +1,8 @@
 # quack-diff
 
-<p align="center">
-  <img src="images/quack_diff.jpg" alt="quack-diff logo" width="500">
-</p>
-
 The zero-dependency regression testing tool for modern data warehouses.
 
 DuckDB-powered data diffing for Snowflake.
-
-**Documentation:** [matteorenoldi.github.io/quack-diff](https://matteorenoldi.github.io/quack-diff)
 
 ## Features
 
@@ -17,12 +11,6 @@ DuckDB-powered data diffing for Snowflake.
 - **Time-Travel Support**: Compare data against historical snapshots (Snowflake, Delta Lake)
 - **CI/CD Ready**: Exit codes for pipeline integration, environment variable configuration
 - **Hacker-Friendly**: Rich terminal output with beautiful diff tables
-
-## Installation
-
-```bash
-uv add quack-diff
-```
 
 ## Quick Start
 
@@ -53,29 +41,6 @@ quack-diff diff \
 quack-diff schema --source db1.users --target db2.users
 ```
 
-## Configuration
-
-quack-diff supports configuration via environment variables:
-
-```bash
-# Snowflake
-export QUACK_DIFF_SNOWFLAKE_ACCOUNT="your-account"
-export QUACK_DIFF_SNOWFLAKE_USER="your-user"
-export QUACK_DIFF_SNOWFLAKE_PASSWORD="your-password"
-```
-
-Or via a `quack-diff.yaml` configuration file:
-
-```yaml
-snowflake:
-  account: your-account
-  user: your-user
-  database: your-database
-
-defaults:
-  threshold: 0.0
-```
-
 ## How It Works
 
 quack-diff leverages DuckDB's extension system to connect to external databases:
@@ -85,26 +50,7 @@ quack-diff leverages DuckDB's extension system to connect to external databases:
 3. **Compare**: Identify mismatches by comparing hash values
 4. **Report**: Display results in beautiful terminal tables
 
-## Development
+## Next steps
 
-```bash
-# Clone the repository
-git clone https://github.com/matteorenoldi/quack-diff.git
-cd quack-diff
-
-# Install with dev dependencies
-uv sync
-
-# Install pre-commit hooks
-uv run prek install
-
-# Run tests
-uv run pytest
-
-# Lint
-uv run ruff check .
-```
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
+- [Installation](installation.md) — Install quack-diff with uv or pip
+- [Configuration](configuration.md) — Environment variables and config file

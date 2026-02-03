@@ -1,0 +1,8 @@
+[project]
+site_name = "quack-diff"
+site_url = "https://matteorenoldi.github.io/quack-diff"
+site_description = "The zero-dependency regression testing tool for modern data warehouses. DuckDB-powered data diffing for Snowflake."
+site_author = "Matteo Renoldi"
+copyright = "© 2025 Matteo Renoldi"
+docs_dir = "docs"
+site_dir = "site"
