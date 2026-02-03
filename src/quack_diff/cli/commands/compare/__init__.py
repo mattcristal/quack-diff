@@ -1,4 +1,4 @@
-"""Diff command for comparing data between two tables."""
+"""Compare command for comparing data between two tables."""
 
 from __future__ import annotations
 
@@ -267,7 +267,7 @@ def _pull_snowflake_tables(
     return source_local, target_local, connection_infos
 
 
-def diff(
+def compare(
     source: Annotated[
         str,
         typer.Option(
@@ -357,15 +357,15 @@ def diff(
 
         # Compare two local DuckDB/Parquet files
 
-        quack-diff diff --source data/prod.parquet --target data/dev.parquet --key id
+        quack-diff compare --source data/prod.parquet --target data/dev.parquet --key id
 
         # Compare tables in attached databases
 
-        quack-diff diff --source sf.schema.users --target pg.public.users --key user_id
+        quack-diff compare --source sf.schema.users --target pg.public.users --key user_id
 
         # Time-travel comparison (Snowflake)
 
-        quack-diff diff --source sf.orders --target sf.orders \\
+        quack-diff compare --source sf.orders --target sf.orders \\
             --source-at "5 minutes ago" --key order_id
     """
     try:

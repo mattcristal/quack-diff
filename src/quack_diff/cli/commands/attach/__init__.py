@@ -38,7 +38,7 @@ def attach(
     This is a utility command to verify database connectivity
     and explore available tables.
 
-    Note: For Snowflake tables, use the 'diff' command directly with
+    Note: For Snowflake tables, use the 'compare' command directly with
     sf.SCHEMA.TABLE syntax. Snowflake data is pulled using the native
     connector which supports time-travel queries.
 
