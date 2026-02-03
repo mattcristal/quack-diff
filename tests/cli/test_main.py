@@ -41,7 +41,7 @@ class TestCLIHelp:
     def test_help_shows_available_commands(self):
         """Test that --help lists available commands."""
         result = runner.invoke(app, ["--help"])
-        assert "diff" in result.output
+        assert "compare" in result.output
         assert "schema" in result.output
         assert "attach" in result.output
 

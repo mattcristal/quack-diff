@@ -22,21 +22,21 @@ uv add quack-diff
 
 ## Quick Start
 
-### Basic Diff
+### Basic compare
 
 ```bash
 # Compare two tables
-quack-diff diff --source db1.users --target db2.users --key id
+quack-diff compare --source db1.users --target db2.users --key id
 
 # Compare with threshold (allow up to 1% difference)
-quack-diff diff --source prod.orders --target dev.orders --key order_id --threshold 0.01
+quack-diff compare --source prod.orders --target dev.orders --key order_id --threshold 0.01
 ```
 
-### Time-Travel Diff (Snowflake)
+### Time-Travel compare (Snowflake)
 
 ```bash
 # Compare current data with 5 minutes ago
-quack-diff diff \
+quack-diff compare \
   --source snowflake.orders \
   --target snowflake.orders \
   --source-at "5 minutes ago" \
