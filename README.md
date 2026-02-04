@@ -7,6 +7,12 @@ The zero-dependency regression testing tool for modern data warehouses.
 > [!WARNING]
 > ⚠️ This project is high work-in-progress.
 
+---
+
+**Documentation**: [github.io/quack-diff](https://mattcristal.github.io/quack-diff/)
+
+---
+
 ## Features
 
 - **DuckDB-First Architecture**: Uses DuckDB as a universal adapter for database connectivity
