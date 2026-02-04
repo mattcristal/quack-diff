@@ -1,6 +1,7 @@
 """Snowflake SQL dialect adapter."""
 
 from quack_diff.core.adapters.base import BaseAdapter, Dialect
+from quack_diff.core.utils import parse_offset_to_seconds
 
 
 class SnowflakeAdapter(BaseAdapter):
@@ -104,55 +105,10 @@ class SnowflakeAdapter(BaseAdapter):
 
         if offset is not None:
             # Parse offset string to seconds
-            seconds = self._parse_offset_to_seconds(offset)
+            seconds = parse_offset_to_seconds(offset)
             return f"AT(OFFSET => -{seconds})"
 
         raise ValueError("Either timestamp or offset must be provided")
-
-    def _parse_offset_to_seconds(self, offset: str) -> int:
-        """Parse a human-readable offset to seconds.
-
-        Args:
-            offset: String like "5 minutes", "1 hour", "30 seconds"
-
-        Returns:
-            Number of seconds
-
-        Raises:
-            ValueError: If offset format is not recognized
-        """
-        offset = offset.lower().strip()
-
-        # Handle "X ago" format
-        if offset.endswith(" ago"):
-            offset = offset[:-4].strip()
-
-        parts = offset.split()
-        if len(parts) != 2:
-            raise ValueError(
-                f"Invalid offset format: '{offset}'. Expected format like '5 minutes' or '1 hour'"
-            )
-
-        try:
-            value = int(parts[0])
-        except ValueError:
-            raise ValueError(f"Invalid numeric value in offset: '{parts[0]}'") from None
-
-        unit = parts[1].rstrip("s")  # Remove trailing 's' for plurals
-
-        multipliers = {
-            "second": 1,
-            "minute": 60,
-            "hour": 3600,
-            "day": 86400,
-        }
-
-        if unit not in multipliers:
-            raise ValueError(
-                f"Unknown time unit: '{unit}'. Supported units: {list(multipliers.keys())}"
-            )
-
-        return value * multipliers[unit]
 
     def wrap_table_with_time_travel(
         self,

@@ -23,54 +23,12 @@ from quack_diff.core.sql_utils import (
     sanitize_identifier,
     sanitize_path,
 )
+from quack_diff.core.utils import parse_offset_to_seconds
 
 if TYPE_CHECKING:
     from quack_diff.config import Settings, SnowflakeConfig
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_offset_to_seconds(offset: str) -> int:
-    """Parse a human-readable time offset to seconds.
-
-    Supports formats like:
-    - "5 minutes ago"
-    - "1 hour ago"
-    - "30 seconds ago"
-
-    Args:
-        offset: Human-readable offset string
-
-    Returns:
-        Number of seconds
-
-    Raises:
-        ValueError: If offset format is not recognized
-    """
-    import re
-
-    offset_lower = offset.lower().strip()
-
-    # Remove "ago" suffix if present
-    offset_lower = offset_lower.replace(" ago", "").strip()
-
-    # Parse number and unit
-    match = re.match(r"(\d+)\s*(second|minute|hour|day|week)s?", offset_lower)
-    if not match:
-        raise ValueError(f"Could not parse offset: {offset}. Expected format like '5 minutes ago' or '1 hour ago'")
-
-    value = int(match.group(1))
-    unit = match.group(2)
-
-    multipliers = {
-        "second": 1,
-        "minute": 60,
-        "hour": 3600,
-        "day": 86400,
-        "week": 604800,
-    }
-
-    return value * multipliers[unit]
 
 
 class DatabaseType(str, Enum):
@@ -544,7 +502,7 @@ class DuckDBConnector:
         elif offset:
             # Parse offset like "5 minutes ago" -> OFFSET => -300
             # The offset is parsed and converted to integer, safe from injection
-            seconds = _parse_offset_to_seconds(offset)
+            seconds = parse_offset_to_seconds(offset)
             query = f"SELECT * FROM {sanitized_table} AT (OFFSET => -{seconds})"
 
         logger.info(f"Pulling Snowflake table {sanitized_table} to local table {sanitized_local}")

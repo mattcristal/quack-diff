@@ -77,50 +77,6 @@ class TestSnowflakeTimeTravelClause:
             adapter.time_travel_clause()
 
 
-class TestParseOffsetToSeconds:
-    """Tests for _parse_offset_to_seconds (valid and invalid inputs)."""
-
-    @pytest.fixture
-    def adapter(self):
-        return SnowflakeAdapter()
-
-    def test_seconds(self, adapter: SnowflakeAdapter):
-        assert adapter._parse_offset_to_seconds("30 seconds") == 30
-
-    def test_seconds_plural(self, adapter: SnowflakeAdapter):
-        assert adapter._parse_offset_to_seconds("1 seconds") == 1
-
-    def test_minutes(self, adapter: SnowflakeAdapter):
-        assert adapter._parse_offset_to_seconds("5 minutes") == 300
-
-    def test_hours(self, adapter: SnowflakeAdapter):
-        assert adapter._parse_offset_to_seconds("1 hour") == 3600
-
-    def test_days(self, adapter: SnowflakeAdapter):
-        assert adapter._parse_offset_to_seconds("2 days") == 172800
-
-    def test_ago_format_stripped(self, adapter: SnowflakeAdapter):
-        """'X ago' format has ' ago' stripped before parsing."""
-        assert adapter._parse_offset_to_seconds("5 minutes ago") == 300
-
-    def test_invalid_format_wrong_number_of_parts(self, adapter: SnowflakeAdapter):
-        """Single word or too many parts raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid offset format"):
-            adapter._parse_offset_to_seconds("minutes")
-        with pytest.raises(ValueError, match="Invalid offset format"):
-            adapter._parse_offset_to_seconds("5 minutes extra")
-
-    def test_invalid_numeric_value(self, adapter: SnowflakeAdapter):
-        """Non-numeric first part raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid numeric value"):
-            adapter._parse_offset_to_seconds("five minutes")
-
-    def test_unknown_time_unit(self, adapter: SnowflakeAdapter):
-        """Unknown unit raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown time unit"):
-            adapter._parse_offset_to_seconds("5 weeks")
-
-
 class TestWrapTableWithTimeTravel:
     """Tests for wrap_table_with_time_travel."""
 
