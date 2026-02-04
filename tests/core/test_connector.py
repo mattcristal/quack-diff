@@ -1,6 +1,13 @@
 """Tests for the DuckDB connector module."""
 
+import pytest
+
 from quack_diff.core.connector import DatabaseType, DuckDBConnector, create_connector
+from quack_diff.core.sql_utils import (
+    AttachError,
+    QueryExecutionError,
+    TableNotFoundError,
+)
 
 
 class TestDuckDBConnector:
@@ -133,3 +140,91 @@ class TestCreateConnectorContextManager:
         # DuckDB connections don't have an is_closed property,
         # so we verify by checking the internal state
         assert connector._connection is None
+
+
+class TestDatabaseErrorHandling:
+    """Tests for database operation error handling."""
+
+    def test_attach_nonexistent_file(self, connector: DuckDBConnector):
+        """Test that attaching a non-existent file raises AttachError."""
+        with pytest.raises(AttachError) as exc_info:
+            connector.attach_duckdb("missing", "/nonexistent/path/database.duckdb")
+
+        assert "not found" in exc_info.value.message.lower()
+        assert exc_info.value.path == "/nonexistent/path/database.duckdb"
+        assert exc_info.value.alias == "missing"
+
+    def test_attach_already_attached_different_path(self, connector: DuckDBConnector, tmp_path):
+        """Test that re-attaching with different path raises AttachError."""
+        import duckdb
+
+        # Create two temp databases
+        db_path1 = tmp_path / "db1.duckdb"
+        db_path2 = tmp_path / "db2.duckdb"
+
+        for db_path in [db_path1, db_path2]:
+            temp_conn = duckdb.connect(str(db_path))
+            temp_conn.execute("CREATE TABLE t (id INT)")
+            temp_conn.close()
+
+        # Attach first one
+        connector.attach_duckdb("mydb", str(db_path1))
+
+        # Try to attach second one with same alias
+        with pytest.raises(AttachError) as exc_info:
+            connector.attach_duckdb("mydb", str(db_path2))
+
+        assert "already in use" in exc_info.value.message.lower()
+
+    def test_attach_same_path_returns_existing(self, connector: DuckDBConnector, tmp_path):
+        """Test that re-attaching same path returns existing attachment."""
+        import duckdb
+
+        db_path = tmp_path / "test.duckdb"
+        temp_conn = duckdb.connect(str(db_path))
+        temp_conn.execute("CREATE TABLE t (id INT)")
+        temp_conn.close()
+
+        # Attach first time
+        attached1 = connector.attach_duckdb("mydb", str(db_path))
+
+        # Attach second time with same path
+        attached2 = connector.attach_duckdb("mydb", str(db_path))
+
+        assert attached1 is attached2
+
+    def test_get_table_schema_nonexistent_table(self, connector: DuckDBConnector):
+        """Test that getting schema of non-existent table raises TableNotFoundError."""
+        with pytest.raises(TableNotFoundError) as exc_info:
+            connector.get_table_schema("nonexistent_table")
+
+        assert "nonexistent_table" in exc_info.value.table
+
+    def test_get_row_count_nonexistent_table(self, connector: DuckDBConnector):
+        """Test that counting rows of non-existent table raises TableNotFoundError."""
+        with pytest.raises(TableNotFoundError) as exc_info:
+            connector.get_row_count("nonexistent_table")
+
+        assert "nonexistent_table" in exc_info.value.table
+
+    def test_execute_invalid_query(self, connector: DuckDBConnector):
+        """Test that executing invalid SQL for non-existent table raises TableNotFoundError."""
+        with pytest.raises(TableNotFoundError) as exc_info:
+            connector.execute("SELECT * FROM nonexistent_table_xyz")
+
+        assert "nonexistent_table_xyz" in exc_info.value.table
+
+    def test_execute_syntax_error(self, connector: DuckDBConnector):
+        """Test that SQL syntax errors raise QueryExecutionError."""
+        with pytest.raises(QueryExecutionError):
+            connector.execute("SELEC * FORM users")
+
+    def test_execute_fetchall_table_not_found(self, connector: DuckDBConnector):
+        """Test execute_fetchall with non-existent table."""
+        with pytest.raises((TableNotFoundError, QueryExecutionError)):
+            connector.execute_fetchall("SELECT * FROM ghost_table")
+
+    def test_execute_fetchone_table_not_found(self, connector: DuckDBConnector):
+        """Test execute_fetchone with non-existent table."""
+        with pytest.raises((TableNotFoundError, QueryExecutionError)):
+            connector.execute_fetchone("SELECT * FROM ghost_table")

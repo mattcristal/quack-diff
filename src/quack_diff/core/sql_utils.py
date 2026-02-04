@@ -15,6 +15,159 @@ class SQLInjectionError(ValueError):
     pass
 
 
+class DatabaseError(Exception):
+    """Base exception for database-related errors.
+
+    Provides a consistent interface for all database operation failures
+    with descriptive error messages.
+    """
+
+    def __init__(self, message: str, operation: str | None = None, details: str | None = None) -> None:
+        """Initialize the database error.
+
+        Args:
+            message: Human-readable error message
+            operation: The operation that failed (e.g., "ATTACH", "DESCRIBE")
+            details: Additional technical details about the error
+        """
+        self.message = message
+        self.operation = operation
+        self.details = details
+        super().__init__(self._format_message())
+
+    def _format_message(self) -> str:
+        """Format the full error message."""
+        parts = [self.message]
+        if self.operation:
+            parts.insert(0, f"[{self.operation}]")
+        if self.details:
+            parts.append(f"Details: {self.details}")
+        return " ".join(parts)
+
+
+class AttachError(DatabaseError):
+    """Raised when attaching a database fails.
+
+    Common causes:
+    - File not found
+    - Permission denied
+    - Invalid/corrupted database file
+    - Database already attached with different alias
+    """
+
+    def __init__(
+        self, message: str, path: str | None = None, alias: str | None = None, details: str | None = None
+    ) -> None:
+        """Initialize the attach error.
+
+        Args:
+            message: Human-readable error message
+            path: Path to the database file that failed to attach
+            alias: Alias/name used for the attachment
+            details: Additional technical details
+        """
+        self.path = path
+        self.alias = alias
+        super().__init__(message, operation="ATTACH", details=details)
+
+
+class TableNotFoundError(DatabaseError):
+    """Raised when a table does not exist.
+
+    This error occurs when attempting to:
+    - DESCRIBE a non-existent table
+    - Query a table that doesn't exist
+    - Compare tables where one or both are missing
+    """
+
+    def __init__(self, table: str, message: str | None = None, details: str | None = None) -> None:
+        """Initialize the table not found error.
+
+        Args:
+            table: The table name that was not found
+            message: Optional custom message (default: auto-generated)
+            details: Additional technical details
+        """
+        self.table = table
+        if message is None:
+            message = f"Table '{table}' not found"
+        super().__init__(message, operation="TABLE_LOOKUP", details=details)
+
+
+class SchemaError(DatabaseError):
+    """Raised when schema retrieval or validation fails.
+
+    This error occurs when:
+    - Unable to retrieve table schema
+    - Schema is empty or invalid
+    - Schema comparison fails
+    """
+
+    def __init__(self, message: str, table: str | None = None, details: str | None = None) -> None:
+        """Initialize the schema error.
+
+        Args:
+            message: Human-readable error message
+            table: The table whose schema caused the error
+            details: Additional technical details
+        """
+        self.table = table
+        super().__init__(message, operation="SCHEMA", details=details)
+
+
+class KeyColumnError(DatabaseError):
+    """Raised when the key column validation fails.
+
+    This error occurs when:
+    - Key column does not exist in source table
+    - Key column does not exist in target table
+    - Key column types are incompatible between tables
+    """
+
+    def __init__(
+        self,
+        key_column: str,
+        message: str | None = None,
+        source_table: str | None = None,
+        target_table: str | None = None,
+        details: str | None = None,
+    ) -> None:
+        """Initialize the key column error.
+
+        Args:
+            key_column: The key column that failed validation
+            message: Optional custom message (default: auto-generated)
+            source_table: Source table name
+            target_table: Target table name
+            details: Additional technical details
+        """
+        self.key_column = key_column
+        self.source_table = source_table
+        self.target_table = target_table
+        if message is None:
+            message = f"Key column '{key_column}' validation failed"
+        super().__init__(message, operation="KEY_VALIDATION", details=details)
+
+
+class QueryExecutionError(DatabaseError):
+    """Raised when a SQL query execution fails.
+
+    This error wraps underlying database errors with context about
+    what operation was being performed.
+    """
+
+    def __init__(self, message: str, query: str | None = None, details: str | None = None) -> None:
+        """Initialize the query execution error.
+
+        Args:
+            message: Human-readable error message
+            query: The SQL query that failed (truncated for display)
+            details: Additional technical details
+        """
+        self.query = query[:200] + "..." if query and len(query) > 200 else query
+        super().__init__(message, operation="QUERY", details=details)
+
+
 def sanitize_identifier(identifier: str, max_length: int = 255) -> str:
     """Sanitize a SQL identifier (table name, column name, database name, etc.).
 

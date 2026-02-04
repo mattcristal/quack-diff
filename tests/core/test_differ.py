@@ -1,5 +1,7 @@
 """Tests for the data differ module."""
 
+import pytest
+
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.differ import (
     ColumnInfo,
@@ -8,6 +10,7 @@ from quack_diff.core.differ import (
     DiffType,
     SchemaComparisonResult,
 )
+from quack_diff.core.sql_utils import KeyColumnError, SchemaError, TableNotFoundError
 
 
 class TestColumnInfo:
@@ -245,3 +248,189 @@ class TestDiffResult:
         )
 
         assert not result.is_within_threshold  # 10% > 5%
+
+
+class TestDataDifferErrorHandling:
+    """Tests for DataDiffer error handling."""
+
+    def test_diff_nonexistent_source_table(self, connector: DuckDBConnector):
+        """Test diff with non-existent source table raises TableNotFoundError."""
+        connector.execute("CREATE TABLE real_target (id INT, name VARCHAR)")
+        connector.execute("INSERT INTO real_target VALUES (1, 'test')")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(TableNotFoundError) as exc_info:
+            differ.diff(
+                source_table="nonexistent_source",
+                target_table="real_target",
+                key_column="id",
+            )
+
+        assert "nonexistent_source" in exc_info.value.table
+
+    def test_diff_nonexistent_target_table(self, connector: DuckDBConnector):
+        """Test diff with non-existent target table raises TableNotFoundError."""
+        connector.execute("CREATE TABLE real_source (id INT, name VARCHAR)")
+        connector.execute("INSERT INTO real_source VALUES (1, 'test')")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(TableNotFoundError) as exc_info:
+            differ.diff(
+                source_table="real_source",
+                target_table="nonexistent_target",
+                key_column="id",
+            )
+
+        assert "nonexistent_target" in exc_info.value.table
+
+    def test_diff_key_column_not_in_source(self, connector: DuckDBConnector):
+        """Test diff with key column not in source raises KeyColumnError."""
+        connector.execute("CREATE TABLE source_no_key (name VARCHAR, value INT)")
+        connector.execute("INSERT INTO source_no_key VALUES ('test', 1)")
+
+        connector.execute("CREATE TABLE target_with_key (id INT, name VARCHAR, value INT)")
+        connector.execute("INSERT INTO target_with_key VALUES (1, 'test', 1)")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(KeyColumnError) as exc_info:
+            differ.diff(
+                source_table="source_no_key",
+                target_table="target_with_key",
+                key_column="id",
+            )
+
+        assert exc_info.value.key_column == "id"
+        assert "source" in exc_info.value.message.lower()
+        assert "Available columns" in exc_info.value.details
+
+    def test_diff_key_column_not_in_target(self, connector: DuckDBConnector):
+        """Test diff with key column not in target raises KeyColumnError."""
+        connector.execute("CREATE TABLE source_with_key (id INT, name VARCHAR)")
+        connector.execute("INSERT INTO source_with_key VALUES (1, 'test')")
+
+        connector.execute("CREATE TABLE target_no_key (name VARCHAR, value INT)")
+        connector.execute("INSERT INTO target_no_key VALUES ('test', 1)")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(KeyColumnError) as exc_info:
+            differ.diff(
+                source_table="source_with_key",
+                target_table="target_no_key",
+                key_column="id",
+            )
+
+        assert exc_info.value.key_column == "id"
+        assert "target" in exc_info.value.message.lower()
+
+    def test_diff_key_column_type_mismatch(self, connector: DuckDBConnector):
+        """Test diff with incompatible key column types raises KeyColumnError."""
+        connector.execute("CREATE TABLE int_key_source (id INT, name VARCHAR)")
+        connector.execute("INSERT INTO int_key_source VALUES (1, 'test')")
+
+        connector.execute("CREATE TABLE str_key_target (id VARCHAR, name VARCHAR)")
+        connector.execute("INSERT INTO str_key_target VALUES ('1', 'test')")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(KeyColumnError) as exc_info:
+            differ.diff(
+                source_table="int_key_source",
+                target_table="str_key_target",
+                key_column="id",
+            )
+
+        assert exc_info.value.key_column == "id"
+        assert "incompatible" in exc_info.value.message.lower()
+        assert "INT" in exc_info.value.details.upper()
+        assert "VARCHAR" in exc_info.value.details.upper()
+
+    def test_compare_schemas_nonexistent_source(self, connector: DuckDBConnector):
+        """Test schema comparison with non-existent source raises TableNotFoundError."""
+        connector.execute("CREATE TABLE real_table (id INT)")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(TableNotFoundError) as exc_info:
+            differ.compare_schemas("ghost_source", "real_table")
+
+        assert "ghost_source" in exc_info.value.table
+
+    def test_compare_schemas_nonexistent_target(self, connector: DuckDBConnector):
+        """Test schema comparison with non-existent target raises TableNotFoundError."""
+        connector.execute("CREATE TABLE real_table (id INT)")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(TableNotFoundError) as exc_info:
+            differ.compare_schemas("real_table", "ghost_target")
+
+        assert "ghost_target" in exc_info.value.table
+
+    def test_get_schema_nonexistent_table(self, connector: DuckDBConnector):
+        """Test getting schema of non-existent table raises TableNotFoundError."""
+        differ = DataDiffer(connector)
+
+        with pytest.raises(TableNotFoundError) as exc_info:
+            differ.get_schema("nonexistent_table")
+
+        assert "nonexistent_table" in exc_info.value.table
+
+    def test_get_row_count_nonexistent_table(self, connector: DuckDBConnector):
+        """Test getting row count of non-existent table raises TableNotFoundError."""
+        differ = DataDiffer(connector)
+
+        with pytest.raises(TableNotFoundError) as exc_info:
+            differ.get_row_count("nonexistent_table")
+
+        assert "nonexistent_table" in exc_info.value.table
+
+    def test_quick_check_key_column_not_in_source(self, connector: DuckDBConnector):
+        """Test quick_check with key column not in source raises KeyColumnError."""
+        connector.execute("CREATE TABLE src (name VARCHAR)")
+        connector.execute("CREATE TABLE tgt (id INT, name VARCHAR)")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(KeyColumnError) as exc_info:
+            differ.quick_check(
+                source_table="src",
+                target_table="tgt",
+                key_column="id",
+            )
+
+        assert exc_info.value.key_column == "id"
+
+    def test_quick_check_nonexistent_table(self, connector: DuckDBConnector):
+        """Test quick_check with non-existent table raises TableNotFoundError."""
+        connector.execute("CREATE TABLE real_table (id INT)")
+
+        differ = DataDiffer(connector)
+
+        with pytest.raises(TableNotFoundError):
+            differ.quick_check(
+                source_table="real_table",
+                target_table="ghost_table",
+                key_column="id",
+            )
+
+    def test_diff_no_common_columns(self, connector: DuckDBConnector):
+        """Test diff with no common columns raises SchemaError."""
+        connector.execute("CREATE TABLE disjoint_source (a INT, b VARCHAR)")
+        connector.execute("INSERT INTO disjoint_source VALUES (1, 'test')")
+
+        connector.execute("CREATE TABLE disjoint_target (c INT, d VARCHAR)")
+        connector.execute("INSERT INTO disjoint_target VALUES (1, 'test')")
+
+        differ = DataDiffer(connector)
+
+        # When tables have no common columns at all, key column validation fails first
+        with pytest.raises((KeyColumnError, SchemaError)):
+            differ.diff(
+                source_table="disjoint_source",
+                target_table="disjoint_target",
+                key_column="a",
+            )
