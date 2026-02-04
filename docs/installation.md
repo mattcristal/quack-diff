@@ -1,15 +1,9 @@
 # Installation
 
-## With uv (recommended)
+## With uv
 
 ```bash
 uv add quack-diff
-```
-
-## With pip
-
-```bash
-pip install quack-diff
 ```
 
 ## Snowflake support
@@ -18,8 +12,6 @@ For Snowflake connectivity, install the optional extras:
 
 ```bash
 uv add quack-diff[snowflake]
-# or
-pip install quack-diff[snowflake]
 ```
 
 ## Development
