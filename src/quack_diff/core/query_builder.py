@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from quack_diff.core.adapters.base import BaseAdapter, Dialect, get_adapter
+from quack_diff.core.sql_utils import sanitize_identifier
 
 if TYPE_CHECKING:
     pass
@@ -111,30 +112,38 @@ class QueryBuilder:
 
         Returns:
             SQL query string
+
+        Raises:
+            SQLInjectionError: If table or column names contain unsafe characters
         """
         adapter = self.get_adapter(dialect)
 
+        # Sanitize all identifiers
+        sanitized_table = sanitize_identifier(table)
+        sanitized_key = sanitize_identifier(key_column)
+        sanitized_columns = [sanitize_identifier(col) for col in columns]
+
         # Build the row hash expression
         hash_expr = adapter.row_hash_expression(
-            columns=columns,
+            columns=sanitized_columns,
             separator=self.column_delimiter,
             null_sentinel=self.null_sentinel,
         )
 
         # Handle time-travel if specified
-        table_ref = table
+        table_ref = sanitized_table
         if timestamp is not None or offset is not None:
             table_ref = adapter.wrap_table_with_time_travel(
-                table=table,
+                table=sanitized_table,
                 timestamp=timestamp,
                 offset=offset,
             )
 
         return f"""SELECT
-    {key_column},
+    {sanitized_key},
     {hash_expr} AS row_hash
 FROM {table_ref}
-ORDER BY {key_column}"""
+ORDER BY {sanitized_key}"""
 
     def build_count_query(
         self,
@@ -153,13 +162,19 @@ ORDER BY {key_column}"""
 
         Returns:
             SQL query string
+
+        Raises:
+            SQLInjectionError: If table name contains unsafe characters
         """
         adapter = self.get_adapter(dialect)
 
-        table_ref = table
+        # Sanitize table name
+        sanitized_table = sanitize_identifier(table)
+
+        table_ref = sanitized_table
         if timestamp is not None or offset is not None:
             table_ref = adapter.wrap_table_with_time_travel(
-                table=table,
+                table=sanitized_table,
                 timestamp=timestamp,
                 offset=offset,
             )
@@ -182,9 +197,15 @@ ORDER BY {key_column}"""
 
         Returns:
             SQL query string
+
+        Raises:
+            SQLInjectionError: If table name contains unsafe characters
         """
+        # Sanitize table name
+        sanitized_table = sanitize_identifier(table)
+
         # DuckDB's DESCRIBE works on attached tables too
-        return f"DESCRIBE {table}"
+        return f"DESCRIBE {sanitized_table}"
 
     def build_sample_query(
         self,
@@ -211,27 +232,44 @@ ORDER BY {key_column}"""
 
         Returns:
             SQL query string
+
+        Raises:
+            SQLInjectionError: If table or column names contain unsafe characters
+
+        Note:
+            This method still uses string interpolation for key values in the IN clause.
+            This is a known limitation. For production use, consider using parameterized
+            queries or further validation of key values.
         """
         adapter = self.get_adapter(dialect)
 
-        table_ref = table
+        # Sanitize identifiers
+        sanitized_table = sanitize_identifier(table)
+        sanitized_key = sanitize_identifier(key_column)
+        sanitized_columns = [sanitize_identifier(col) for col in columns]
+
+        table_ref = sanitized_table
         if timestamp is not None or offset is not None:
             table_ref = adapter.wrap_table_with_time_travel(
-                table=table,
+                table=sanitized_table,
                 timestamp=timestamp,
                 offset=offset,
             )
 
         # Format keys for IN clause
-        # TODO: Handle non-string keys properly
-        formatted_keys = ", ".join(f"'{k}'" for k in keys)
+        # TODO: This still uses string interpolation for values, which could be
+        # a security risk if keys contain malicious content. Consider using
+        # parameterized queries in the future.
+        # For now, we escape single quotes to prevent basic injection
+        escaped_keys = [str(k).replace("'", "''") for k in keys]
+        formatted_keys = ", ".join(f"'{k}'" for k in escaped_keys)
 
-        columns_str = ", ".join(columns)
+        columns_str = ", ".join(sanitized_columns)
 
         return f"""SELECT {columns_str}
 FROM {table_ref}
-WHERE {key_column} IN ({formatted_keys})
-ORDER BY {key_column}"""
+WHERE {sanitized_key} IN ({formatted_keys})
+ORDER BY {sanitized_key}"""
 
     def build_aggregate_hash_query(
         self,
@@ -257,27 +295,35 @@ ORDER BY {key_column}"""
 
         Returns:
             SQL query string
+
+        Raises:
+            SQLInjectionError: If table or column names contain unsafe characters
         """
         adapter = self.get_adapter(dialect)
 
+        # Sanitize identifiers
+        sanitized_table = sanitize_identifier(table)
+        sanitized_key = sanitize_identifier(key_column)
+        sanitized_columns = [sanitize_identifier(col) for col in columns]
+
         # Build row hash expression
         hash_expr = adapter.row_hash_expression(
-            columns=columns,
+            columns=sanitized_columns,
             separator=self.column_delimiter,
             null_sentinel=self.null_sentinel,
         )
 
-        table_ref = table
+        table_ref = sanitized_table
         if timestamp is not None or offset is not None:
             table_ref = adapter.wrap_table_with_time_travel(
-                table=table,
+                table=sanitized_table,
                 timestamp=timestamp,
                 offset=offset,
             )
 
         # Create an aggregate hash by XORing or concatenating individual hashes
         # We use MD5 of the concatenated, ordered hashes
-        return f"""SELECT MD5(STRING_AGG({hash_expr}, '' ORDER BY {key_column})) AS table_hash
+        return f"""SELECT MD5(STRING_AGG({hash_expr}, '' ORDER BY {sanitized_key})) AS table_hash
 FROM {table_ref}"""
 
     def build_hash_comparison_query(
@@ -310,54 +356,63 @@ FROM {table_ref}"""
 
         Returns:
             SQL query string
+
+        Raises:
+            SQLInjectionError: If table or column names contain unsafe characters
         """
         adapter = self.get_adapter(dialect)
 
+        # Sanitize all identifiers
+        sanitized_source = sanitize_identifier(source_table)
+        sanitized_target = sanitize_identifier(target_table)
+        sanitized_key = sanitize_identifier(key_column)
+        sanitized_columns = [sanitize_identifier(col) for col in columns]
+
         hash_expr = adapter.row_hash_expression(
-            columns=columns,
+            columns=sanitized_columns,
             separator=self.column_delimiter,
             null_sentinel=self.null_sentinel,
         )
 
         # Handle time-travel for both tables
-        source_ref = source_table
+        source_ref = sanitized_source
         if source_timestamp is not None or source_offset is not None:
             source_ref = adapter.wrap_table_with_time_travel(
-                table=source_table,
+                table=sanitized_source,
                 timestamp=source_timestamp,
                 offset=source_offset,
             )
 
-        target_ref = target_table
+        target_ref = sanitized_target
         if target_timestamp is not None or target_offset is not None:
             target_ref = adapter.wrap_table_with_time_travel(
-                table=target_table,
+                table=sanitized_target,
                 timestamp=target_timestamp,
                 offset=target_offset,
             )
 
         return f"""WITH source_hashes AS (
     SELECT
-        {key_column},
+        {sanitized_key},
         {hash_expr} AS row_hash
     FROM {source_ref}
 ),
 target_hashes AS (
     SELECT
-        {key_column},
+        {sanitized_key},
         {hash_expr} AS row_hash
     FROM {target_ref}
 )
 SELECT
-    COALESCE(s.{key_column}, t.{key_column}) AS {key_column},
+    COALESCE(s.{sanitized_key}, t.{sanitized_key}) AS {sanitized_key},
     CASE
-        WHEN s.{key_column} IS NULL THEN 'added'
-        WHEN t.{key_column} IS NULL THEN 'removed'
+        WHEN s.{sanitized_key} IS NULL THEN 'added'
+        WHEN t.{sanitized_key} IS NULL THEN 'removed'
         ELSE 'modified'
     END AS diff_type,
     s.row_hash AS source_hash,
     t.row_hash AS target_hash
 FROM source_hashes s
-FULL OUTER JOIN target_hashes t ON s.{key_column} = t.{key_column}
+FULL OUTER JOIN target_hashes t ON s.{sanitized_key} = t.{sanitized_key}
 WHERE s.row_hash IS DISTINCT FROM t.row_hash
-ORDER BY COALESCE(s.{key_column}, t.{key_column})"""
+ORDER BY COALESCE(s.{sanitized_key}, t.{sanitized_key})"""

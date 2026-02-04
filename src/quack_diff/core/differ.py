@@ -92,9 +92,7 @@ class SchemaComparisonResult:
     def is_identical(self) -> bool:
         """Check if schemas are identical."""
         return (
-            len(self.source_only_columns) == 0
-            and len(self.target_only_columns) == 0
-            and len(self.type_mismatches) == 0
+            len(self.source_only_columns) == 0 and len(self.target_only_columns) == 0 and len(self.type_mismatches) == 0
         )
 
 
@@ -376,12 +374,8 @@ class DataDiffer:
         logger.debug(f"Comparing columns: {columns}")
 
         # Step 2: Get row counts
-        source_count = self.get_row_count(
-            source_table, source_dialect, source_timestamp, source_offset
-        )
-        target_count = self.get_row_count(
-            target_table, target_dialect, target_timestamp, target_offset
-        )
+        source_count = self.get_row_count(source_table, source_dialect, source_timestamp, source_offset)
+        target_count = self.get_row_count(target_table, target_dialect, target_timestamp, target_offset)
 
         logger.info(f"Source rows: {source_count}, Target rows: {target_count}")
 
@@ -401,7 +395,11 @@ class DataDiffer:
         )
 
         if limit:
-            query += f"\nLIMIT {limit}"
+            from quack_diff.core.sql_utils import validate_limit
+
+            validated_limit = validate_limit(limit)
+            if validated_limit is not None:
+                query += f"\nLIMIT {validated_limit}"
 
         logger.debug("Executing comparison query")
         diff_rows = self.connector.execute_fetchall(query)
@@ -462,9 +460,7 @@ class DataDiffer:
         """
         # Get common columns
         if columns is None:
-            schema_result = self.compare_schemas(
-                source_table, target_table, source_dialect, target_dialect
-            )
+            schema_result = self.compare_schemas(source_table, target_table, source_dialect, target_dialect)
             columns = schema_result.matching_columns
 
         if key_column not in columns:
