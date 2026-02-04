@@ -55,4 +55,3 @@ quack-diff leverages DuckDB's extension system to connect to external databases:
 
 - [Installation](installation.md) — Install quack-diff with uv or pip
 - [Configuration](configuration.md) — Environment variables and config file
-- [Security](security.md) — SQL injection prevention and security best practices
