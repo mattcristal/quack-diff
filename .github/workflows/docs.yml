@@ -31,6 +31,9 @@ jobs:
       - name: Create virtual environment
         run: uv venv
 
+      - name: Prepare site directory
+        run: mkdir -p site
+
       - name: Install zensical
         run: uv pip install zensical
 
