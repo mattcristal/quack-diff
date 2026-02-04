@@ -4,7 +4,8 @@
 
 The zero-dependency regression testing tool for modern data warehouses.
 
-DuckDB-powered data diffing for Snowflake.
+> [!WARNING]
+> ⚠️ This project is high work-in-progress.
 
 ## Features
 
