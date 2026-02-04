@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from quack_diff.cli.console import console, print_error, print_info, print_success
+from quack_diff.cli.console import (
+    console,
+    print_error,
+    print_info,
+    print_success,
+    set_json_output_mode,
+    status_context,
+)
+from quack_diff.cli.errors import get_error_info
 from quack_diff.cli.formatters import (
     SnowflakeConnectionInfo,
     print_diff_result,
     print_snowflake_connections,
+)
+from quack_diff.cli.output import (
+    format_diff_result_json,
+    format_error_json,
+    print_json,
 )
 from quack_diff.config import get_settings
 from quack_diff.core.connector import DuckDBConnector
@@ -359,6 +373,20 @@ def compare(
             help="Exit with error code if modified rows are found (default: only fail on added/removed)",
         ),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Show what would be compared without executing the comparison",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Output results as JSON for CI/CD integration",
+        ),
+    ] = False,
 ) -> None:
     """Compare data between two tables.
 
@@ -376,7 +404,21 @@ def compare(
 
         quack-diff compare --source sf.orders --target sf.orders \\
             --source-at "5 minutes ago" --key order_id
+
+        # Dry run to see what would be compared
+
+        quack-diff compare --source prod.users --target dev.users --key id --dry-run
+
+        # JSON output for CI/CD pipelines
+
+        quack-diff compare --source prod.users --target dev.users --key id --json
     """
+    # Enable JSON output mode if requested
+    if json_output:
+        set_json_output_mode(True)
+
+    start_time = time.time()
+
     try:
         # Load settings
         settings = get_settings(config_file=config_file)
@@ -406,6 +448,22 @@ def compare(
         # Check if we need to use the Snowflake pull approach
         use_snowflake_pull = _is_snowflake_table(source, settings) or _is_snowflake_table(target, settings)
 
+        # Handle dry-run mode
+        if dry_run:
+            _print_dry_run_info(
+                source=source,
+                target=target,
+                key=key,
+                columns=column_list,
+                source_at=source_at,
+                target_at=target_at,
+                threshold=threshold,
+                limit=limit,
+                use_snowflake_pull=use_snowflake_pull,
+                json_output=json_output,
+            )
+            raise typer.Exit(0)
+
         # Create connector and differ
         with DuckDBConnector(settings=settings) as connector:
             differ = DataDiffer(
@@ -421,17 +479,18 @@ def compare(
             snowflake_connections: list[SnowflakeConnectionInfo] = []
             if use_snowflake_pull:
                 # Use native Snowflake connector for pulling data (supports time-travel)
-                source_table_name, target_table_name, snowflake_connections = _pull_snowflake_tables(
-                    connector=connector,
-                    settings=settings,
-                    source=source,
-                    target=target,
-                    source_timestamp=source_timestamp,
-                    source_offset=source_offset,
-                    target_timestamp=target_timestamp,
-                    target_offset=target_offset,
-                    verbose=verbose,
-                )
+                with status_context("Pulling data from Snowflake..."):
+                    source_table_name, target_table_name, snowflake_connections = _pull_snowflake_tables(
+                        connector=connector,
+                        settings=settings,
+                        source=source,
+                        target=target,
+                        source_timestamp=source_timestamp,
+                        source_offset=source_offset,
+                        target_timestamp=target_timestamp,
+                        target_offset=target_offset,
+                        verbose=verbose,
+                    )
                 # Time-travel already applied during pull, so don't pass to diff
                 source_timestamp = None
                 source_offset = None
@@ -447,27 +506,40 @@ def compare(
                 source_table_name = source
                 target_table_name = target
 
-            # Perform diff
-            result = differ.diff(
-                source_table=source_table_name,
-                target_table=target_table_name,
-                key_column=key,
-                columns=column_list,
-                source_timestamp=source_timestamp,
-                source_offset=source_offset,
-                target_timestamp=target_timestamp,
-                target_offset=target_offset,
-                threshold=threshold,
-                limit=limit,
-            )
+            # Perform diff with progress indication
+            with status_context("Comparing tables..."):
+                result = differ.diff(
+                    source_table=source_table_name,
+                    target_table=target_table_name,
+                    key_column=key,
+                    columns=column_list,
+                    source_timestamp=source_timestamp,
+                    source_offset=source_offset,
+                    target_timestamp=target_timestamp,
+                    target_offset=target_offset,
+                    threshold=threshold,
+                    limit=limit,
+                )
 
-            # Print results with original table names for display
-            print_diff_result(
-                result,
-                verbose=verbose,
-                source_display_name=source,
-                target_display_name=target,
-            )
+            duration = time.time() - start_time
+
+            # Output results based on format
+            if json_output:
+                json_data = format_diff_result_json(
+                    result,
+                    source_display_name=source,
+                    target_display_name=target,
+                    duration_seconds=duration,
+                )
+                print_json(json_data)
+            else:
+                # Print results with original table names for display
+                print_diff_result(
+                    result,
+                    verbose=verbose,
+                    source_display_name=source,
+                    target_display_name=target,
+                )
 
             # Exit with appropriate code
             if result.is_match:
@@ -492,44 +564,150 @@ def compare(
                     print_success(f"Found {result.modified_count} modified rows (no added/removed)")
                     raise typer.Exit(0)
 
+    except typer.Exit:
+        raise
     except TableNotFoundError as e:
-        print_error(f"Table not found: {e.message}")
-        if e.details:
-            console.print(f"[dim]{e.details}[/dim]")
-        raise typer.Exit(2) from None
+        _handle_error(e, "Table not found", verbose, json_output, start_time)
     except KeyColumnError as e:
-        print_error(f"Key column error: {e.message}")
-        if e.details:
-            console.print(f"[dim]{e.details}[/dim]")
-        raise typer.Exit(2) from None
+        _handle_error(e, "Key column error", verbose, json_output, start_time)
     except SchemaError as e:
-        print_error(f"Schema error: {e.message}")
-        if e.details:
-            console.print(f"[dim]{e.details}[/dim]")
-        raise typer.Exit(2) from None
+        _handle_error(e, "Schema error", verbose, json_output, start_time)
     except AttachError as e:
-        print_error(f"Database attach error: {e.message}")
-        if e.details:
-            console.print(f"[dim]{e.details}[/dim]")
-        raise typer.Exit(2) from None
+        _handle_error(e, "Database attach error", verbose, json_output, start_time)
     except QueryExecutionError as e:
-        print_error(f"Query execution error: {e.message}")
-        if e.details:
-            console.print(f"[dim]{e.details}[/dim]")
-        raise typer.Exit(2) from None
+        _handle_error(e, "Query execution error", verbose, json_output, start_time)
     except SQLInjectionError as e:
-        print_error(f"Invalid input: {e}")
-        raise typer.Exit(2) from None
+        _handle_error(e, "Invalid input", verbose, json_output, start_time)
     except DatabaseError as e:
-        print_error(f"Database error: {e.message}")
-        if e.details:
-            console.print(f"[dim]{e.details}[/dim]")
-        raise typer.Exit(2) from None
+        _handle_error(e, "Database error", verbose, json_output, start_time)
     except ValueError as e:
-        print_error(str(e))
-        raise typer.Exit(2) from None
+        _handle_error(e, "Invalid value", verbose, json_output, start_time)
     except Exception as e:
-        print_error(f"Unexpected error: {e}")
-        if verbose:
+        _handle_error(e, "Unexpected error", verbose, json_output, start_time)
+
+
+def _print_dry_run_info(
+    source: str,
+    target: str,
+    key: str,
+    columns: list[str] | None,
+    source_at: str | None,
+    target_at: str | None,
+    threshold: float,
+    limit: int | None,
+    use_snowflake_pull: bool,
+    json_output: bool,
+) -> None:
+    """Print dry-run information showing what would be compared.
+
+    Args:
+        source: Source table
+        target: Target table
+        key: Key column
+        columns: Columns to compare
+        source_at: Source time-travel
+        target_at: Target time-travel
+        threshold: Difference threshold
+        limit: Result limit
+        use_snowflake_pull: Whether Snowflake pull would be used
+        json_output: Whether to output as JSON
+    """
+    dry_run_info = {
+        "mode": "dry_run",
+        "source": {
+            "table": source,
+            "time_travel": source_at,
+            "is_snowflake": use_snowflake_pull and "sf." in source.lower(),
+        },
+        "target": {
+            "table": target,
+            "time_travel": target_at,
+            "is_snowflake": use_snowflake_pull and "sf." in target.lower(),
+        },
+        "comparison": {
+            "key_column": key,
+            "columns": columns or "all common columns",
+            "threshold": threshold,
+            "limit": limit,
+        },
+        "operations": [],
+    }
+
+    # Describe what would happen
+    operations = []
+    if use_snowflake_pull:
+        operations.append("Pull data from Snowflake using native connector")
+    operations.append("Compare table schemas")
+    operations.append("Count rows in both tables")
+    operations.append("Compute row hashes and identify differences")
+
+    dry_run_info["operations"] = operations
+
+    if json_output:
+        print_json(dry_run_info)
+    else:
+        console.print("\n[header]Dry Run Mode[/header]")
+        console.print("The following operations would be performed:\n")
+
+        console.print(f"[key]Source:[/key] {source}")
+        if source_at:
+            console.print(f"  [muted]Time travel: {source_at}[/muted]")
+
+        console.print(f"[key]Target:[/key] {target}")
+        if target_at:
+            console.print(f"  [muted]Time travel: {target_at}[/muted]")
+
+        console.print(f"\n[key]Key Column:[/key] {key}")
+        console.print(f"[key]Columns:[/key] {columns or 'all common columns'}")
+
+        if threshold > 0:
+            console.print(f"[key]Threshold:[/key] {threshold * 100:.2f}%")
+        if limit:
+            console.print(f"[key]Limit:[/key] {limit}")
+
+        console.print("\n[header]Operations:[/header]")
+        for i, op in enumerate(operations, 1):
+            console.print(f"  {i}. {op}")
+
+        console.print()
+
+
+def _handle_error(
+    e: Exception,
+    prefix: str,
+    verbose: bool,
+    json_output: bool,
+    start_time: float,
+) -> None:
+    """Handle an error with appropriate output format.
+
+    Args:
+        e: The exception
+        prefix: Error message prefix
+        verbose: Whether verbose mode is enabled
+        json_output: Whether JSON output is enabled
+        start_time: Start time for duration calculation
+    """
+    duration = time.time() - start_time
+    error_info = get_error_info(e)
+
+    if json_output:
+        json_data = format_error_json(
+            error_type=error_info.error_type,
+            message=f"{prefix}: {error_info.message}",
+            details=error_info.details,
+            recovery_suggestion=error_info.recovery_suggestion,
+        )
+        # Add duration to the output
+        json_data["meta"]["duration_seconds"] = duration
+        print_json(json_data)
+    else:
+        print_error(f"{prefix}: {error_info.message}")
+        if error_info.details:
+            console.print(f"[dim]{error_info.details}[/dim]")
+        if error_info.recovery_suggestion:
+            console.print(f"\n[info]Hint: {error_info.recovery_suggestion}[/info]")
+        if verbose and not isinstance(e, (ValueError, SQLInjectionError)):
             console.print_exception()
-        raise typer.Exit(2) from None
+
+    raise typer.Exit(2) from None
