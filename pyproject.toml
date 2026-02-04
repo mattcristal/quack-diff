@@ -1,7 +1,7 @@
 [project]
 name = "quack-diff"
 version = "0.0.9"
-description = "The zero-dependency regression testing tool for modern data warehouses. DuckDB-powered data diffing for Snowflake."
+description = "Regression testing tool for modern data warehouses, powered by duck-db"
 readme = "README.md"
 license = "MIT"
 authors = [
