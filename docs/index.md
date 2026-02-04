@@ -3,7 +3,7 @@
 Regression testing tool for modern data warehouses, powered by duck-db
 
 <!-- markdownlint-disable-next-line MD057 -->
-![quack-diff logo](docs/images/quack_diff.jpg)
+![quack-diff logo](images/quack_diff.jpg)
 
 ## Features
 
