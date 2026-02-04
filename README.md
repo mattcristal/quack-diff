@@ -1,6 +1,7 @@
 # quack-diff
 
 [![CI](https://github.com/mattcristal/quack-diff/actions/workflows/ci.yml/badge.svg?event=push)](https://github.com/mattcristal/quack-diff/actions/workflows/ci.yml?query=branch%3Amain)
+[![codecov](https://codecov.io/gh/mattcristal/quack-diff/graph/badge.svg)](https://codecov.io/gh/mattcristal/quack-diff)
 
 ![quack-diff logo](images/quack_diff.jpg)
 
