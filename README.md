@@ -1,5 +1,7 @@
 # quack-diff
 
+[![CI](https://github.com/mattcristal/quack-diff/actions/workflows/ci.yml/badge.svg?event=push)](https://github.com/mattcristal/quack-diff/actions/workflows/ci.yml?query=branch%3Amain)
+
 ![quack-diff logo](images/quack_diff.jpg)
 
 The zero-dependency regression testing tool for modern data warehouses.
