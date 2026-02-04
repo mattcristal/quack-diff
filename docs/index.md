@@ -1,8 +1,9 @@
 # quack-diff
 
-The zero-dependency regression testing tool for modern data warehouses.
+Regression testing tool for modern data warehouses, powered by duck-db
 
-DuckDB-powered data diffing for Snowflake.
+<!-- markdownlint-disable-next-line MD057 -->
+![quack-diff logo](docs/images/quack_diff.jpg)
 
 ## Features
 
@@ -10,7 +11,7 @@ DuckDB-powered data diffing for Snowflake.
 - **Dialect-Safe Hashing**: Handles NULL values and type mismatches correctly across databases
 - **Time-Travel Support**: Compare data against historical snapshots (Snowflake, Delta Lake)
 - **CI/CD Ready**: Exit codes for pipeline integration, environment variable configuration
-- **Hacker-Friendly**: Rich terminal output with beautiful diff tables
+- **User-Friendly**: Rich terminal output with beautiful diff tables
 
 ## Quick Start
 

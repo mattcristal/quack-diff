@@ -225,3 +225,6 @@ __marimo__/
 
 # Library specific
 quack-diff.yaml
+
+# Rumdl
+.rumdl_cache/

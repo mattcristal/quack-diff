@@ -1,0 +1,16 @@
+/* Custom styles for quack-diff documentation.
+ *
+ * Start small: tweak typography, spacing, or colors as needed.
+ * This file is loaded via `extra_css` in `zensical.toml`,
+ * following the setup used on the Zensical docs site.
+ */
+
+/* Example: slightly heavier main titles */
+h1 {
+  font-weight: 800;
+}
+
+/* Example: tighten paragraph max width a bit */
+main p {
+  max-width: 70ch;
+}

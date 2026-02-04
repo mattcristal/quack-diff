@@ -4,7 +4,8 @@
 
 The zero-dependency regression testing tool for modern data warehouses.
 
-DuckDB-powered data diffing for Snowflake.
+> [!WARNING]
+> ⚠️ This project is high work-in-progress.
 
 ## Features
 
@@ -12,7 +13,7 @@ DuckDB-powered data diffing for Snowflake.
 - **Dialect-Safe Hashing**: Handles NULL values and type mismatches correctly across databases
 - **Time-Travel Support**: Compare data against historical snapshots (Snowflake, Delta Lake)
 - **CI/CD Ready**: Exit codes for pipeline integration, environment variable configuration
-- **Hacker-Friendly**: Rich terminal output with beautiful diff tables
+- **User-Friendly**: Rich terminal output with beautiful diff tables
 
 ## Installation
 
