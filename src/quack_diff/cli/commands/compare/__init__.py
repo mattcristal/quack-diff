@@ -17,6 +17,15 @@ from quack_diff.cli.formatters import (
 from quack_diff.config import get_settings
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.differ import DataDiffer
+from quack_diff.core.sql_utils import (
+    AttachError,
+    DatabaseError,
+    KeyColumnError,
+    QueryExecutionError,
+    SchemaError,
+    SQLInjectionError,
+    TableNotFoundError,
+)
 
 if TYPE_CHECKING:
     from quack_diff.config import Settings
@@ -483,11 +492,44 @@ def compare(
                     print_success(f"Found {result.modified_count} modified rows (no added/removed)")
                     raise typer.Exit(0)
 
+    except TableNotFoundError as e:
+        print_error(f"Table not found: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except KeyColumnError as e:
+        print_error(f"Key column error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except SchemaError as e:
+        print_error(f"Schema error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except AttachError as e:
+        print_error(f"Database attach error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except QueryExecutionError as e:
+        print_error(f"Query execution error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except SQLInjectionError as e:
+        print_error(f"Invalid input: {e}")
+        raise typer.Exit(2) from None
+    except DatabaseError as e:
+        print_error(f"Database error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
     except ValueError as e:
         print_error(str(e))
         raise typer.Exit(2) from None
     except Exception as e:
-        print_error(f"Error: {e}")
+        print_error(f"Unexpected error: {e}")
         if verbose:
             console.print_exception()
         raise typer.Exit(2) from None

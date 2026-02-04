@@ -7,11 +7,18 @@ from typing import Annotated
 
 import typer
 
-from quack_diff.cli.console import print_error
+from quack_diff.cli.console import console, print_error
 from quack_diff.cli.formatters import print_schema_result
 from quack_diff.config import get_settings
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.differ import DataDiffer
+from quack_diff.core.sql_utils import (
+    DatabaseError,
+    QueryExecutionError,
+    SchemaError,
+    SQLInjectionError,
+    TableNotFoundError,
+)
 
 
 def schema(
@@ -66,6 +73,29 @@ def schema(
             else:
                 raise typer.Exit(1)
 
+    except TableNotFoundError as e:
+        print_error(f"Table not found: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except SchemaError as e:
+        print_error(f"Schema error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except QueryExecutionError as e:
+        print_error(f"Query execution error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
+    except SQLInjectionError as e:
+        print_error(f"Invalid input: {e}")
+        raise typer.Exit(2) from None
+    except DatabaseError as e:
+        print_error(f"Database error: {e.message}")
+        if e.details:
+            console.print(f"[dim]{e.details}[/dim]")
+        raise typer.Exit(2) from None
     except Exception as e:
-        print_error(f"Error: {e}")
+        print_error(f"Unexpected error: {e}")
         raise typer.Exit(2) from None

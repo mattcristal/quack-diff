@@ -15,6 +15,12 @@ from typing import TYPE_CHECKING, Any
 from quack_diff.core.adapters.base import Dialect
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.query_builder import QueryBuilder
+from quack_diff.core.sql_utils import (
+    KeyColumnError,
+    QueryExecutionError,
+    SchemaError,
+    TableNotFoundError,
+)
 
 if TYPE_CHECKING:
     pass
@@ -211,9 +217,33 @@ class DataDiffer:
 
         Returns:
             List of ColumnInfo objects
+
+        Raises:
+            TableNotFoundError: If the table does not exist
+            SchemaError: If schema retrieval fails or returns empty
         """
         query = self.query_builder.build_schema_query(table, dialect)
-        result = self.connector.execute_fetchall(query)
+        try:
+            result = self.connector.execute_fetchall(query)
+        except TableNotFoundError as e:
+            raise TableNotFoundError(
+                table=table,
+                message=f"Cannot retrieve schema: table '{table}' does not exist",
+                details="Verify the table name, schema, and database are correct",
+            ) from e
+        except QueryExecutionError as e:
+            raise SchemaError(
+                f"Failed to retrieve schema for table '{table}'",
+                table=table,
+                details=e.details,
+            ) from e
+
+        if not result:
+            raise SchemaError(
+                f"Table '{table}' has no columns or schema is empty",
+                table=table,
+                details="The table may be corrupted or have an invalid structure",
+            )
 
         columns = []
         for row in result:
@@ -242,9 +272,42 @@ class DataDiffer:
 
         Returns:
             SchemaComparisonResult with comparison details
+
+        Raises:
+            TableNotFoundError: If either table does not exist
+            SchemaError: If schema retrieval fails for either table
         """
-        source_cols = self.get_schema(source_table, source_dialect)
-        target_cols = self.get_schema(target_table, target_dialect)
+        # Get source schema with clear error context
+        try:
+            source_cols = self.get_schema(source_table, source_dialect)
+        except TableNotFoundError as e:
+            raise TableNotFoundError(
+                table=source_table,
+                message=f"Source table '{source_table}' does not exist",
+                details=e.details,
+            ) from e
+        except SchemaError as e:
+            raise SchemaError(
+                f"Failed to retrieve schema for source table '{source_table}'",
+                table=source_table,
+                details=e.details,
+            ) from e
+
+        # Get target schema with clear error context
+        try:
+            target_cols = self.get_schema(target_table, target_dialect)
+        except TableNotFoundError as e:
+            raise TableNotFoundError(
+                table=target_table,
+                message=f"Target table '{target_table}' does not exist",
+                details=e.details,
+            ) from e
+        except SchemaError as e:
+            raise SchemaError(
+                f"Failed to retrieve schema for target table '{target_table}'",
+                table=target_table,
+                details=e.details,
+            ) from e
 
         source_names = {c.name.lower(): c for c in source_cols}
         target_names = {c.name.lower(): c for c in target_cols}
@@ -295,6 +358,10 @@ class DataDiffer:
 
         Returns:
             Number of rows
+
+        Raises:
+            TableNotFoundError: If the table does not exist
+            QueryExecutionError: If the count query fails
         """
         query = self.query_builder.build_count_query(
             table=table,
@@ -302,8 +369,71 @@ class DataDiffer:
             timestamp=timestamp,
             offset=offset,
         )
-        result = self.connector.execute_fetchone(query)
-        return result[0] if result else 0
+        try:
+            result = self.connector.execute_fetchone(query)
+            return result[0] if result else 0
+        except TableNotFoundError as e:
+            raise TableNotFoundError(
+                table=table,
+                message=f"Cannot count rows: table '{table}' does not exist",
+                details="Verify the table name, schema, and database are correct",
+            ) from e
+
+    def _validate_key_column(
+        self,
+        key_column: str,
+        schema_result: SchemaComparisonResult,
+        source_table: str,
+        target_table: str,
+    ) -> None:
+        """Validate that the key column exists in both tables and has compatible types.
+
+        Args:
+            key_column: The key column to validate
+            schema_result: Schema comparison result
+            source_table: Source table name
+            target_table: Target table name
+
+        Raises:
+            KeyColumnError: If key column validation fails
+        """
+        source_cols = {c.name.lower(): c for c in schema_result.source_columns}
+        target_cols = {c.name.lower(): c for c in schema_result.target_columns}
+        key_lower = key_column.lower()
+
+        # Check if key column exists in source table
+        if key_lower not in source_cols:
+            available_cols = [c.name for c in schema_result.source_columns]
+            raise KeyColumnError(
+                key_column=key_column,
+                message=f"Key column '{key_column}' does not exist in source table '{source_table}'",
+                source_table=source_table,
+                target_table=target_table,
+                details=f"Available columns: {', '.join(available_cols)}",
+            )
+
+        # Check if key column exists in target table
+        if key_lower not in target_cols:
+            available_cols = [c.name for c in schema_result.target_columns]
+            raise KeyColumnError(
+                key_column=key_column,
+                message=f"Key column '{key_column}' does not exist in target table '{target_table}'",
+                source_table=source_table,
+                target_table=target_table,
+                details=f"Available columns: {', '.join(available_cols)}",
+            )
+
+        # Check if key column types are compatible
+        source_col = source_cols[key_lower]
+        target_col = target_cols[key_lower]
+        if not source_col.type_matches(target_col):
+            raise KeyColumnError(
+                key_column=key_column,
+                message=f"Key column '{key_column}' has incompatible types between tables",
+                source_table=source_table,
+                target_table=target_table,
+                details=f"Source type: {source_col.data_type}, Target type: {target_col.data_type}",
+            )
 
     def diff(
         self,
@@ -341,6 +471,12 @@ class DataDiffer:
 
         Returns:
             DiffResult with comparison details
+
+        Raises:
+            TableNotFoundError: If either table does not exist
+            SchemaError: If schema retrieval fails
+            KeyColumnError: If key column validation fails
+            QueryExecutionError: If comparison query fails
         """
         logger.info(f"Comparing {source_table} vs {target_table}")
 
@@ -352,6 +488,9 @@ class DataDiffer:
             target_dialect=target_dialect,
         )
 
+        # Step 2: Validate key column BEFORE proceeding with comparison
+        self._validate_key_column(key_column, schema_result, source_table, target_table)
+
         # Determine columns to compare
         if columns is None:
             columns = schema_result.matching_columns
@@ -361,10 +500,10 @@ class DataDiffer:
             columns = [c for c in columns if c.lower() in available]
 
         if not columns:
-            raise ValueError(
-                "No common columns found between tables. "
-                f"Source columns: {[c.name for c in schema_result.source_columns]}, "
-                f"Target columns: {[c.name for c in schema_result.target_columns]}"
+            raise SchemaError(
+                "No common columns found between tables for comparison",
+                details=f"Source columns: {[c.name for c in schema_result.source_columns]}, "
+                f"Target columns: {[c.name for c in schema_result.target_columns]}",
             )
 
         # Ensure key column is in the list
@@ -402,7 +541,14 @@ class DataDiffer:
                 query += f"\nLIMIT {validated_limit}"
 
         logger.debug("Executing comparison query")
-        diff_rows = self.connector.execute_fetchall(query)
+        try:
+            diff_rows = self.connector.execute_fetchall(query)
+        except QueryExecutionError as e:
+            raise QueryExecutionError(
+                f"Failed to execute comparison query between '{source_table}' and '{target_table}'",
+                query=query,
+                details=e.details,
+            ) from e
 
         # Parse differences
         differences = []
@@ -457,10 +603,20 @@ class DataDiffer:
 
         Returns:
             True if tables appear identical, False otherwise
+
+        Raises:
+            TableNotFoundError: If either table does not exist
+            SchemaError: If schema retrieval fails
+            KeyColumnError: If key column validation fails
+            QueryExecutionError: If hash query execution fails
         """
-        # Get common columns
+        # Get common columns and validate key column
+        schema_result = self.compare_schemas(source_table, target_table, source_dialect, target_dialect)
+
+        # Validate key column exists in both tables
+        self._validate_key_column(key_column, schema_result, source_table, target_table)
+
         if columns is None:
-            schema_result = self.compare_schemas(source_table, target_table, source_dialect, target_dialect)
             columns = schema_result.matching_columns
 
         if key_column not in columns:
@@ -480,7 +636,13 @@ class DataDiffer:
             dialect=Dialect.DUCKDB,
         )
 
-        source_hash = self.connector.execute_fetchone(source_query)
-        target_hash = self.connector.execute_fetchone(target_query)
+        try:
+            source_hash = self.connector.execute_fetchone(source_query)
+            target_hash = self.connector.execute_fetchone(target_query)
+        except QueryExecutionError as e:
+            raise QueryExecutionError(
+                "Failed to compute aggregate hash for comparison",
+                details=e.details,
+            ) from e
 
         return source_hash == target_hash

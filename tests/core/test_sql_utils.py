@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 
 from quack_diff.core.sql_utils import (
+    AttachError,
+    DatabaseError,
+    KeyColumnError,
+    QueryExecutionError,
+    SchemaError,
     SQLInjectionError,
+    TableNotFoundError,
     build_parameterized_in_clause,
     escape_like_pattern,
     quote_identifier,
@@ -272,3 +278,124 @@ class TestEscapeLikePattern:
     def test_no_special_characters(self):
         """Test pattern without special characters."""
         assert escape_like_pattern("testpattern") == "testpattern"
+
+
+class TestDatabaseErrorClasses:
+    """Tests for database error exception classes."""
+
+    def test_database_error_basic(self):
+        """Test basic DatabaseError."""
+        error = DatabaseError("Connection failed")
+        assert "Connection failed" in str(error)
+        assert error.message == "Connection failed"
+        assert error.operation is None
+        assert error.details is None
+
+    def test_database_error_with_operation(self):
+        """Test DatabaseError with operation."""
+        error = DatabaseError("Failed", operation="SELECT")
+        assert "[SELECT]" in str(error)
+        assert error.operation == "SELECT"
+
+    def test_database_error_with_details(self):
+        """Test DatabaseError with details."""
+        error = DatabaseError("Failed", details="Connection refused")
+        assert "Details: Connection refused" in str(error)
+        assert error.details == "Connection refused"
+
+    def test_database_error_full(self):
+        """Test DatabaseError with all fields."""
+        error = DatabaseError("Query failed", operation="EXECUTE", details="Timeout after 30s")
+        message = str(error)
+        assert "[EXECUTE]" in message
+        assert "Query failed" in message
+        assert "Details: Timeout after 30s" in message
+
+    def test_attach_error(self):
+        """Test AttachError."""
+        error = AttachError(
+            "File not found",
+            path="/path/to/db.duckdb",
+            alias="mydb",
+            details="No such file or directory",
+        )
+        assert error.path == "/path/to/db.duckdb"
+        assert error.alias == "mydb"
+        assert "[ATTACH]" in str(error)
+        assert "File not found" in str(error)
+        assert isinstance(error, DatabaseError)
+
+    def test_table_not_found_error_auto_message(self):
+        """Test TableNotFoundError with auto-generated message."""
+        error = TableNotFoundError(table="users")
+        assert "users" in str(error)
+        assert error.table == "users"
+        assert "[TABLE_LOOKUP]" in str(error)
+        assert isinstance(error, DatabaseError)
+
+    def test_table_not_found_error_custom_message(self):
+        """Test TableNotFoundError with custom message."""
+        error = TableNotFoundError(table="users", message="Custom error message")
+        assert "Custom error message" in str(error)
+        assert error.table == "users"
+
+    def test_schema_error(self):
+        """Test SchemaError."""
+        error = SchemaError("Schema retrieval failed", table="users", details="Permission denied")
+        assert "Schema retrieval failed" in str(error)
+        assert error.table == "users"
+        assert "[SCHEMA]" in str(error)
+        assert isinstance(error, DatabaseError)
+
+    def test_key_column_error_auto_message(self):
+        """Test KeyColumnError with auto-generated message."""
+        error = KeyColumnError(key_column="id")
+        assert "id" in str(error)
+        assert error.key_column == "id"
+        assert "[KEY_VALIDATION]" in str(error)
+        assert isinstance(error, DatabaseError)
+
+    def test_key_column_error_with_tables(self):
+        """Test KeyColumnError with table information."""
+        error = KeyColumnError(
+            key_column="user_id",
+            message="Key column not found in source",
+            source_table="users",
+            target_table="profiles",
+            details="Available columns: name, email",
+        )
+        assert error.key_column == "user_id"
+        assert error.source_table == "users"
+        assert error.target_table == "profiles"
+        assert "Available columns" in str(error)
+
+    def test_query_execution_error(self):
+        """Test QueryExecutionError."""
+        error = QueryExecutionError(
+            "Query failed",
+            query="SELECT * FROM users WHERE id = 1",
+            details="Table not found",
+        )
+        assert "Query failed" in str(error)
+        assert error.query == "SELECT * FROM users WHERE id = 1"
+        assert "[QUERY]" in str(error)
+        assert isinstance(error, DatabaseError)
+
+    def test_query_execution_error_truncates_long_query(self):
+        """Test that QueryExecutionError truncates long queries."""
+        long_query = "SELECT " + "a, " * 100 + "z FROM table"
+        error = QueryExecutionError("Failed", query=long_query)
+        assert len(error.query) <= 203  # 200 + "..."
+
+    def test_error_inheritance(self):
+        """Test that all errors inherit from DatabaseError and Exception."""
+        errors = [
+            AttachError("test"),
+            TableNotFoundError("table"),
+            SchemaError("test"),
+            KeyColumnError("key"),
+            QueryExecutionError("test"),
+        ]
+        for error in errors:
+            assert isinstance(error, DatabaseError)
+            assert isinstance(error, Exception)

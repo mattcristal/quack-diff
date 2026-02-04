@@ -15,7 +15,14 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
-from quack_diff.core.sql_utils import sanitize_identifier, sanitize_path
+from quack_diff.core.sql_utils import (
+    AttachError,
+    QueryExecutionError,
+    SchemaError,
+    TableNotFoundError,
+    sanitize_identifier,
+    sanitize_path,
+)
 
 if TYPE_CHECKING:
     from quack_diff.config import Settings, SnowflakeConfig
@@ -160,17 +167,74 @@ class DuckDBConnector:
 
         Raises:
             SQLInjectionError: If name or path contains unsafe characters
+            AttachError: If the database cannot be attached (file not found,
+                permission denied, invalid format, already attached, etc.)
         """
+        import os
+
         # Sanitize inputs to prevent SQL injection
         sanitized_name = sanitize_identifier(name)
         sanitized_path = sanitize_path(path)
 
+        # Validate file exists before attempting attach
+        if not os.path.exists(sanitized_path):
+            raise AttachError(
+                f"Database file not found: '{sanitized_path}'",
+                path=sanitized_path,
+                alias=sanitized_name,
+                details="Verify the file path is correct and the file exists",
+            )
+
+        # Check if database is already attached with the same name
+        if sanitized_name in self._attached_databases:
+            existing = self._attached_databases[sanitized_name]
+            existing_path = existing.metadata.get("path", "unknown")
+            if existing_path == sanitized_path:
+                logger.debug(f"Database '{sanitized_name}' already attached from '{sanitized_path}'")
+                return existing
+            raise AttachError(
+                f"Database alias '{sanitized_name}' is already in use",
+                path=sanitized_path,
+                alias=sanitized_name,
+                details=f"Already attached from: {existing_path}",
+            )
+
         mode = "READ_ONLY" if read_only else "READ_WRITE"
         logger.info(f"Attaching DuckDB database '{sanitized_path}' as '{sanitized_name}'")
 
-        # Use parameterized query where possible, but ATTACH requires identifier
-        # Since we've sanitized the inputs, this is safe
-        self.connection.execute(f"ATTACH '{sanitized_path}' AS {sanitized_name} ({mode})")
+        try:
+            # Use parameterized query where possible, but ATTACH requires identifier
+            # Since we've sanitized the inputs, this is safe
+            self.connection.execute(f"ATTACH '{sanitized_path}' AS {sanitized_name} ({mode})")
+        except duckdb.IOException as e:
+            error_msg = str(e).lower()
+            if "permission" in error_msg or "access" in error_msg:
+                raise AttachError(
+                    f"Permission denied accessing database file: '{sanitized_path}'",
+                    path=sanitized_path,
+                    alias=sanitized_name,
+                    details=str(e),
+                ) from e
+            raise AttachError(
+                f"I/O error attaching database: '{sanitized_path}'",
+                path=sanitized_path,
+                alias=sanitized_name,
+                details=str(e),
+            ) from e
+        except duckdb.InvalidInputException as e:
+            raise AttachError(
+                f"Invalid database file format: '{sanitized_path}'",
+                path=sanitized_path,
+                alias=sanitized_name,
+                details=str(e),
+            ) from e
+        except duckdb.Error as e:
+            raise AttachError(
+                f"Failed to attach database '{sanitized_path}' as '{sanitized_name}'",
+                path=sanitized_path,
+                alias=sanitized_name,
+                details=str(e),
+            ) from e
 
         attached = AttachedDatabase(
             name=sanitized_name,
@@ -189,12 +253,20 @@ class DuckDBConnector:
 
         Raises:
             SQLInjectionError: If name contains unsafe characters
+            QueryExecutionError: If detach operation fails
         """
         # Sanitize the database name
         sanitized_name = sanitize_identifier(name)
 
         if sanitized_name in self._attached_databases:
-            self.connection.execute(f"DETACH {sanitized_name}")
+            try:
+                self.connection.execute(f"DETACH {sanitized_name}")
+            except duckdb.Error as e:
+                raise QueryExecutionError(
+                    f"Failed to detach database '{sanitized_name}'",
+                    query=f"DETACH {sanitized_name}",
+                    details=str(e),
+                ) from e
             del self._attached_databases[sanitized_name]
             logger.debug(f"Detached database: {sanitized_name}")
 
@@ -207,11 +279,59 @@ class DuckDBConnector:
 
         Returns:
             DuckDB relation result
+
+        Raises:
+            TableNotFoundError: If a referenced table does not exist
+            QueryExecutionError: If query execution fails
         """
         logger.debug(f"Executing query: {query[:100]}...")
-        if params:
-            return self.connection.execute(query, params)
-        return self.connection.execute(query)
+        try:
+            if params:
+                return self.connection.execute(query, params)
+            return self.connection.execute(query)
+        except duckdb.CatalogException as e:
+            error_msg = str(e).lower()
+            # Extract table name from error if possible
+            if "table" in error_msg and ("does not exist" in error_msg or "not found" in error_msg):
+                # Try to extract table name from error message
+                # DuckDB format: "Table with name X does not exist"
+                import re
+
+                match = re.search(r"table with name (\S+) does not exist", str(e), re.IGNORECASE)
+                table_name = match.group(1) if match else "unknown"
+                raise TableNotFoundError(
+                    table=table_name,
+                    message=f"Table '{table_name}' does not exist",
+                    details=str(e),
+                ) from e
+            raise QueryExecutionError(
+                f"Catalog error: {e}",
+                query=query,
+                details=str(e),
+            ) from e
+        except duckdb.BinderException as e:
+            error_msg = str(e).lower()
+            if "table" in error_msg and ("does not exist" in error_msg or "not found" in error_msg):
+                import re
+
+                match = re.search(r"table with name (\S+) does not exist", str(e), re.IGNORECASE)
+                table_name = match.group(1) if match else "unknown"
+                raise TableNotFoundError(
+                    table=table_name,
+                    message=f"Table '{table_name}' does not exist",
+                    details=str(e),
+                ) from e
+            raise QueryExecutionError(
+                f"Query binding error: {e}",
+                query=query,
+                details=str(e),
+            ) from e
+        except duckdb.Error as e:
+            raise QueryExecutionError(
+                f"Query execution failed: {e}",
+                query=query,
+                details=str(e),
+            ) from e
 
     def execute_fetchall(self, query: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:
         """Execute a query and fetch all results.
@@ -250,12 +370,36 @@ class DuckDBConnector:
 
         Raises:
             SQLInjectionError: If table name contains unsafe characters
+            TableNotFoundError: If the table does not exist
+            SchemaError: If schema retrieval fails or returns empty result
         """
         # Sanitize the table name
         sanitized_table = sanitize_identifier(table)
 
-        result = self.execute(f"DESCRIBE {sanitized_table}")
-        rows = result.fetchall()
+        try:
+            result = self.execute(f"DESCRIBE {sanitized_table}")
+            rows = result.fetchall()
+        except TableNotFoundError as e:
+            # Re-raise with more context about the table
+            raise TableNotFoundError(
+                table=sanitized_table,
+                message=f"Cannot describe table '{sanitized_table}': table does not exist",
+                details="Verify the table name, schema, and database are correct",
+            ) from e
+        except QueryExecutionError as e:
+            raise SchemaError(
+                f"Failed to retrieve schema for table '{sanitized_table}'",
+                table=sanitized_table,
+                details=e.details,
+            ) from e
+
+        if not rows:
+            raise SchemaError(
+                f"Table '{sanitized_table}' has no columns or schema is empty",
+                table=sanitized_table,
+                details="The table may be corrupted or have an invalid structure",
+            )
+
         return [(row[0], row[1]) for row in rows]
 
     def get_row_count(self, table: str) -> int:
@@ -269,12 +413,21 @@ class DuckDBConnector:
 
         Raises:
             SQLInjectionError: If table name contains unsafe characters
+            TableNotFoundError: If the table does not exist
+            QueryExecutionError: If the count query fails
         """
         # Sanitize the table name
         sanitized_table = sanitize_identifier(table)
 
-        result = self.execute_fetchone(f"SELECT COUNT(*) FROM {sanitized_table}")
-        return result[0] if result else 0
+        try:
+            result = self.execute_fetchone(f"SELECT COUNT(*) FROM {sanitized_table}")
+            return result[0] if result else 0
+        except TableNotFoundError as e:
+            raise TableNotFoundError(
+                table=sanitized_table,
+                message=f"Cannot count rows: table '{sanitized_table}' does not exist",
+                details="Verify the table name, schema, and database are correct",
+            ) from e
 
     def pull_snowflake_table(
         self,
