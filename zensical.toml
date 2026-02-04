@@ -12,5 +12,5 @@ repo_url = "https://github.com/matteorenoldi/quack-diff"
 repo_name = "matteorenoldi/quack-diff"
 
 [project.theme]
-custom_dir = "overrides"
+custom_dir = "docs/overrides"
 logo = "images/quack_diff.jpg"
