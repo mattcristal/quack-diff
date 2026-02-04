@@ -58,10 +58,10 @@ dev = [
 ]
 
 [tool.rumdl]
-line-length = 120
+line-length = 200
 
 [tool.rumdl.MD013]
-line_length = 120
+line_length = 200
 
 [tool.ruff]
 line-length = 120

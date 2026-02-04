@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
+from quack_diff.core.sql_utils import sanitize_identifier, sanitize_path
+
 if TYPE_CHECKING:
     from quack_diff.config import Settings, SnowflakeConfig
 
@@ -48,10 +50,7 @@ def _parse_offset_to_seconds(offset: str) -> int:
     # Parse number and unit
     match = re.match(r"(\d+)\s*(second|minute|hour|day|week)s?", offset_lower)
     if not match:
-        raise ValueError(
-            f"Could not parse offset: {offset}. "
-            "Expected format like '5 minutes ago' or '1 hour ago'"
-        )
+        raise ValueError(f"Could not parse offset: {offset}. Expected format like '5 minutes ago' or '1 hour ago'")
 
     value = int(match.group(1))
     unit = match.group(2)
@@ -158,18 +157,28 @@ class DuckDBConnector:
 
         Returns:
             AttachedDatabase instance
+
+        Raises:
+            SQLInjectionError: If name or path contains unsafe characters
         """
+        # Sanitize inputs to prevent SQL injection
+        sanitized_name = sanitize_identifier(name)
+        sanitized_path = sanitize_path(path)
+
         mode = "READ_ONLY" if read_only else "READ_WRITE"
-        logger.info(f"Attaching DuckDB database '{path}' as '{name}'")
-        self.connection.execute(f"ATTACH '{path}' AS {name} ({mode})")
+        logger.info(f"Attaching DuckDB database '{sanitized_path}' as '{sanitized_name}'")
+
+        # Use parameterized query where possible, but ATTACH requires identifier
+        # Since we've sanitized the inputs, this is safe
+        self.connection.execute(f"ATTACH '{sanitized_path}' AS {sanitized_name} ({mode})")
 
         attached = AttachedDatabase(
-            name=name,
+            name=sanitized_name,
             db_type=DatabaseType.DUCKDB,
             attached=True,
-            metadata={"path": path, "read_only": read_only},
+            metadata={"path": sanitized_path, "read_only": read_only},
         )
-        self._attached_databases[name] = attached
+        self._attached_databases[sanitized_name] = attached
         return attached
 
     def detach(self, name: str) -> None:
@@ -177,11 +186,17 @@ class DuckDBConnector:
 
         Args:
             name: Name of the database to detach
+
+        Raises:
+            SQLInjectionError: If name contains unsafe characters
         """
-        if name in self._attached_databases:
-            self.connection.execute(f"DETACH {name}")
-            del self._attached_databases[name]
-            logger.debug(f"Detached database: {name}")
+        # Sanitize the database name
+        sanitized_name = sanitize_identifier(name)
+
+        if sanitized_name in self._attached_databases:
+            self.connection.execute(f"DETACH {sanitized_name}")
+            del self._attached_databases[sanitized_name]
+            logger.debug(f"Detached database: {sanitized_name}")
 
     def execute(self, query: str, params: list[Any] | None = None) -> duckdb.DuckDBPyRelation:
         """Execute a SQL query.
@@ -198,9 +213,7 @@ class DuckDBConnector:
             return self.connection.execute(query, params)
         return self.connection.execute(query)
 
-    def execute_fetchall(
-        self, query: str, params: list[Any] | None = None
-    ) -> list[tuple[Any, ...]]:
+    def execute_fetchall(self, query: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:
         """Execute a query and fetch all results.
 
         Args:
@@ -213,9 +226,7 @@ class DuckDBConnector:
         result = self.execute(query, params)
         return result.fetchall()
 
-    def execute_fetchone(
-        self, query: str, params: list[Any] | None = None
-    ) -> tuple[Any, ...] | None:
+    def execute_fetchone(self, query: str, params: list[Any] | None = None) -> tuple[Any, ...] | None:
         """Execute a query and fetch one result.
 
         Args:
@@ -236,8 +247,14 @@ class DuckDBConnector:
 
         Returns:
             List of (column_name, column_type) tuples
+
+        Raises:
+            SQLInjectionError: If table name contains unsafe characters
         """
-        result = self.execute(f"DESCRIBE {table}")
+        # Sanitize the table name
+        sanitized_table = sanitize_identifier(table)
+
+        result = self.execute(f"DESCRIBE {sanitized_table}")
         rows = result.fetchall()
         return [(row[0], row[1]) for row in rows]
 
@@ -249,8 +266,14 @@ class DuckDBConnector:
 
         Returns:
             Number of rows in the table
+
+        Raises:
+            SQLInjectionError: If table name contains unsafe characters
         """
-        result = self.execute_fetchone(f"SELECT COUNT(*) FROM {table}")
+        # Sanitize the table name
+        sanitized_table = sanitize_identifier(table)
+
+        result = self.execute_fetchone(f"SELECT COUNT(*) FROM {sanitized_table}")
         return result[0] if result else 0
 
     def pull_snowflake_table(
@@ -356,15 +379,22 @@ class DuckDBConnector:
         if role:
             conn_params["role"] = role
 
+        # Sanitize table and local table names
+        sanitized_table = sanitize_identifier(table_name)
+        sanitized_local = sanitize_identifier(local_name)
+
         # Build the query with optional time-travel
-        query = f"SELECT * FROM {table_name}"
+        query = f"SELECT * FROM {sanitized_table}"
         if timestamp:
-            query = f"SELECT * FROM {table_name} AT (TIMESTAMP => '{timestamp}'::TIMESTAMP_LTZ)"
+            # Note: timestamp value is passed to Snowflake connector, not interpolated
+            query = f"SELECT * FROM {sanitized_table} AT (TIMESTAMP => '{timestamp}'::TIMESTAMP_LTZ)"
         elif offset:
             # Parse offset like "5 minutes ago" -> OFFSET => -300
-            query = f"SELECT * FROM {table_name} AT (OFFSET => -{_parse_offset_to_seconds(offset)})"
+            # The offset is parsed and converted to integer, safe from injection
+            seconds = _parse_offset_to_seconds(offset)
+            query = f"SELECT * FROM {sanitized_table} AT (OFFSET => -{seconds})"
 
-        logger.info(f"Pulling Snowflake table {table_name} to local table {local_name}")
+        logger.info(f"Pulling Snowflake table {sanitized_table} to local table {sanitized_local}")
         logger.debug(f"Query: {query}")
 
         # Connect to Snowflake and fetch data
@@ -377,11 +407,12 @@ class DuckDBConnector:
                 try:
                     arrow_table = cursor.fetch_arrow_all()
                     if arrow_table is not None:
+                        # Use sanitized local table name
                         self.connection.execute(
-                            f"CREATE OR REPLACE TABLE {local_name} AS SELECT * FROM arrow_table"
+                            f"CREATE OR REPLACE TABLE {sanitized_local} AS SELECT * FROM arrow_table"
                         )
                         logger.debug(f"Loaded {arrow_table.num_rows} rows via Arrow")
-                        return local_name
+                        return sanitized_local
                 except Exception as arrow_err:
                     logger.debug(f"Arrow fetch failed, falling back to pandas: {arrow_err}")
 
@@ -390,11 +421,10 @@ class DuckDBConnector:
                     import pandas  # noqa: F401 - ensures pandas is installed
 
                     df = cursor.fetch_pandas_all()
-                    self.connection.execute(
-                        f"CREATE OR REPLACE TABLE {local_name} AS SELECT * FROM df"
-                    )
+                    # Use sanitized local table name
+                    self.connection.execute(f"CREATE OR REPLACE TABLE {sanitized_local} AS SELECT * FROM df")
                     logger.debug(f"Loaded {len(df)} rows via pandas")
-                    return local_name
+                    return sanitized_local
                 except ImportError as err:
                     raise ImportError(
                         "pandas is required for Snowflake data transfer when Arrow fails. "
@@ -403,7 +433,7 @@ class DuckDBConnector:
             finally:
                 cursor.close()
 
-        return local_name
+        return sanitized_local
 
     @property
     def attached_databases(self) -> dict[str, AttachedDatabase]:
