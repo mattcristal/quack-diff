@@ -1,6 +1,6 @@
 [project]
 name = "quack-diff"
-version = "0.0.9"
+version = "0.0.10"
 description = "Regression testing tool for modern data warehouses, powered by duck-db"
 readme = "README.md"
 license = "MIT"
