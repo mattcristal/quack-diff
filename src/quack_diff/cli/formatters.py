@@ -11,7 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from quack_diff.cli.console import console
-from quack_diff.core.differ import DiffType
+from quack_diff.core.differ import CountResult, DiffType
 
 if TYPE_CHECKING:
     from quack_diff.core.differ import DiffResult, SchemaComparisonResult
@@ -372,4 +372,50 @@ def print_snowflake_connections(connections: list[SnowflakeConnectionInfo]) -> N
 
     console.print()
     console.print(format_snowflake_connections(connections))
+    console.print()
+
+
+def format_count_summary(
+    result: CountResult,
+    display_name_map: dict[str, str] | None = None,
+) -> Panel:
+    """Create a summary panel for count check results.
+
+    Args:
+        result: CountResult to format
+        display_name_map: Optional map from resolved table name to display name
+
+    Returns:
+        Rich Panel with count table and status
+    """
+    table = Table(show_header=True, box=None, padding=(0, 2))
+    table.add_column("Table", style="bold")
+    table.add_column("Count", justify="right")
+
+    display_name_map = display_name_map or {}
+    for tc in result.table_counts:
+        display_name = display_name_map.get(tc.table, tc.table)
+        table.add_row(display_name, f"{tc.count:,}")
+
+    table.add_row("", "")  # Spacer
+    status = Text("MATCH", style="success") if result.is_match else Text("MISMATCH", style="error")
+    table.add_row("Status", status)
+
+    title = "Count Summary"
+    border_style = "green" if result.is_match else "red"
+    return Panel(table, title=title, border_style=border_style)
+
+
+def print_count_result(
+    result: CountResult,
+    display_name_map: dict[str, str] | None = None,
+) -> None:
+    """Print count check result to the console.
+
+    Args:
+        result: CountResult to print
+        display_name_map: Optional map from resolved table name to display name
+    """
+    console.print()
+    console.print(format_count_summary(result, display_name_map))
     console.print()

@@ -59,6 +59,21 @@ quack-diff compare \
 quack-diff schema --source db1.users --target db2.users
 ```
 
+### Count check (bronze/silver/gold)
+
+Validate that pipeline layers have the same number of rows or distinct keys (no row loss):
+
+```bash
+# Same row count across layers
+quack-diff count -t bronze.orders -t silver.orders -t gold.orders
+
+# Same distinct ID count
+quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key order_id
+
+# JSON for CI/CD
+quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key order_id --json
+```
+
 ## Configuration
 
 quack-diff supports configuration via environment variables:

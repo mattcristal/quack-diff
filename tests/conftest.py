@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import duckdb
 import pytest
 
@@ -170,3 +173,46 @@ def schema_mismatch_tables(connector: DuckDBConnector):
     """)
 
     return connector
+
+
+@pytest.fixture
+def temp_parquet_files():
+    """Create temporary parquet files for CLI testing (e.g. count command)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "source.parquet"
+        target_path = Path(tmpdir) / "target.parquet"
+
+        conn = duckdb.connect()
+        conn.execute("CREATE TABLE source (id INT, name VARCHAR, value INT)")
+        conn.execute("INSERT INTO source VALUES (1, 'a', 100), (2, 'b', 200)")
+        conn.execute(f"COPY source TO '{source_path}'")
+
+        conn.execute("CREATE TABLE target (id INT, name VARCHAR, value INT)")
+        conn.execute("INSERT INTO target VALUES (1, 'a', 100), (2, 'b', 200)")
+        conn.execute(f"COPY target TO '{target_path}'")
+        conn.close()
+
+        yield str(source_path), str(target_path)
+
+
+@pytest.fixture
+def temp_duckdb_count_tables():
+    """Create a temporary DuckDB file with two tables (same row count) and config for count CLI tests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        db_path = tmpdir_path / "count_test.duckdb"
+        config_path = tmpdir_path / "quack-diff.yaml"
+
+        conn = duckdb.connect(str(db_path))
+        conn.execute("CREATE TABLE t1 (id INT, name VARCHAR)")
+        conn.execute("INSERT INTO t1 VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+        conn.execute("CREATE TABLE t2 (id INT, name VARCHAR)")
+        conn.execute("INSERT INTO t2 VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+        conn.close()
+
+        config_path.write_text(
+            f"databases:\n  countdb:\n    type: duckdb\n    path: {db_path}\n",
+            encoding="utf-8",
+        )
+
+        yield str(config_path), ["countdb.t1", "countdb.t2"]

@@ -10,7 +10,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from quack_diff.core.differ import DiffResult, SchemaComparisonResult
+    from quack_diff.core.differ import CountResult, DiffResult, SchemaComparisonResult
 
 
 class OutputFormat(str, Enum):
@@ -78,6 +78,19 @@ class JSONErrorOutput:
     exit_code: int = 2
     meta: JSONOutputMeta = field(default_factory=JSONOutputMeta)
     error: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class JSONCountOutput:
+    """JSON output structure for count command results."""
+
+    status: str  # "match", "mismatch"
+    exit_code: int
+    meta: JSONOutputMeta
+    key_column: str | None
+    mode: str  # "rows", "distinct"
+    tables: list[dict[str, Any]]
+    is_match: bool
 
 
 def get_version() -> str:
@@ -223,6 +236,48 @@ def format_schema_result_json(
         },
     )
 
+    return asdict(output)
+
+
+def format_count_result_json(
+    result: CountResult,
+    display_name_map: dict[str, str] | None = None,
+    duration_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Format CountResult as JSON-serializable dictionary.
+
+    Args:
+        result: CountResult to format
+        display_name_map: Optional map from resolved table name to display name
+        duration_seconds: Optional execution duration
+
+    Returns:
+        Dictionary suitable for JSON serialization
+    """
+    display_name_map = display_name_map or {}
+    status = "match" if result.is_match else "mismatch"
+    exit_code = 0 if result.is_match else 1
+
+    tables_data = [
+        {
+            "table": display_name_map.get(tc.table, tc.table),
+            "count": tc.count,
+        }
+        for tc in result.table_counts
+    ]
+
+    output = JSONCountOutput(
+        status=status,
+        exit_code=exit_code,
+        meta=JSONOutputMeta(
+            version=get_version(),
+            duration_seconds=duration_seconds,
+        ),
+        key_column=result.key_column,
+        mode=result.mode,
+        tables=tables_data,
+        is_match=result.is_match,
+    )
     return asdict(output)
 
 

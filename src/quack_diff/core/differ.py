@@ -167,6 +167,35 @@ class DiffResult:
         return self.total_differences == 0
 
 
+@dataclass
+class TableCount:
+    """Row or distinct count for a single table."""
+
+    table: str
+    count: int
+
+
+@dataclass
+class CountResult:
+    """Result of comparing row counts across multiple tables."""
+
+    table_counts: list[TableCount]
+    key_column: str | None = None  # None = COUNT(*), else COUNT(DISTINCT key)
+    is_match: bool = False
+
+    @property
+    def mode(self) -> str:
+        """Count mode: 'rows' for COUNT(*), 'distinct' for COUNT(DISTINCT key)."""
+        return "distinct" if self.key_column else "rows"
+
+    @property
+    def expected_count(self) -> int | None:
+        """Reference count (first table). None if no tables."""
+        if not self.table_counts:
+            return None
+        return self.table_counts[0].count
+
+
 class DataDiffer:
     """Compares data between two database tables.
 
@@ -378,6 +407,61 @@ class DataDiffer:
                 message=f"Cannot count rows: table '{table}' does not exist",
                 details="Verify the table name, schema, and database are correct",
             ) from e
+
+    def count_check(
+        self,
+        tables: list[str],
+        key_column: str | None = None,
+        dialect: Dialect | str = Dialect.DUCKDB,
+    ) -> CountResult:
+        """Check that all tables have the same row or distinct-key count.
+
+        Args:
+            tables: List of fully qualified table names
+            key_column: If set, use COUNT(DISTINCT key_column); else COUNT(*)
+            dialect: SQL dialect for all tables
+
+        Returns:
+            CountResult with per-table counts and is_match
+
+        Raises:
+            TableNotFoundError: If any table does not exist
+            QueryExecutionError: If any count query fails
+        """
+        if not tables:
+            return CountResult(table_counts=[], key_column=key_column, is_match=True)
+
+        table_counts: list[TableCount] = []
+        for table in tables:
+            if key_column:
+                query = self.query_builder.build_distinct_count_query(
+                    table=table,
+                    key_column=key_column,
+                    dialect=dialect,
+                )
+            else:
+                query = self.query_builder.build_count_query(
+                    table=table,
+                    dialect=dialect,
+                )
+            try:
+                row = self.connector.execute_fetchone(query)
+                count = row[0] if row else 0
+            except TableNotFoundError as e:
+                raise TableNotFoundError(
+                    table=table,
+                    message=f"Cannot count: table '{table}' does not exist",
+                    details="Verify the table name, schema, and database are correct",
+                ) from e
+            table_counts.append(TableCount(table=table, count=count))
+
+        reference = table_counts[0].count
+        is_match = all(tc.count == reference for tc in table_counts)
+        return CountResult(
+            table_counts=table_counts,
+            key_column=key_column,
+            is_match=is_match,
+        )
 
     def _validate_key_column(
         self,
