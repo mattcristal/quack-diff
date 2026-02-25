@@ -91,6 +91,12 @@ class JSONCountOutput:
     mode: str  # "rows", "distinct"
     tables: list[dict[str, Any]]
     is_match: bool
+    count_match: bool = True
+    count_within_threshold: bool = True
+    count_threshold: str | None = None
+    sum_match: bool | None = None
+    sum_within_threshold: bool | None = None
+    sum_threshold: str | None = None
 
 
 def get_version() -> str:
@@ -258,13 +264,20 @@ def format_count_result_json(
     status = "match" if result.is_match else "mismatch"
     exit_code = 0 if result.is_match else 1
 
-    tables_data = [
-        {
+    tables_data = []
+    for tc in result.table_counts:
+        table_entry: dict[str, Any] = {
             "table": display_name_map.get(tc.table, tc.table),
             "count": tc.count,
         }
-        for tc in result.table_counts
-    ]
+        # Include optional SUM metric when available
+        sum_val = getattr(tc, "sum_value", None)
+        sum_col = getattr(tc, "sum_column", None)
+        if sum_val is not None:
+            table_entry["sum"] = sum_val
+        if sum_col is not None:
+            table_entry["sum_column"] = sum_col
+        tables_data.append(table_entry)
 
     output = JSONCountOutput(
         status=status,
@@ -277,6 +290,12 @@ def format_count_result_json(
         mode=result.mode,
         tables=tables_data,
         is_match=result.is_match,
+        count_match=result.count_match,
+        count_within_threshold=result.count_within_threshold,
+        count_threshold=str(result.count_threshold) if result.count_threshold else None,
+        sum_match=result.sum_match,
+        sum_within_threshold=result.sum_within_threshold,
+        sum_threshold=str(result.sum_threshold) if result.sum_threshold else None,
     )
     return asdict(output)
 

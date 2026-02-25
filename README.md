@@ -70,9 +70,48 @@ quack-diff count -t bronze.orders -t silver.orders -t gold.orders
 # Same distinct ID count
 quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key order_id
 
+# Per-table GROUP BY (count distinct groups in second table)
+quack-diff count \
+  -t sf.GOLD.FCT_INVOICE \
+  -t "sf.RAW.INVOICE_LINES[salesid,linenum,tariffcode,linestartdate]"
+
+# Add SUM validation alongside row counts
+quack-diff count \
+  -t sf.GOLD.FCT_INVOICE \
+  -t "sf.RAW.INVOICE_LINES[salesid,linenum]" \
+  --sum-column QUANTITY --sum-column qty
+
 # JSON for CI/CD
 quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key order_id --json
 ```
+
+The output shows a **per-metric status** (Count, Sum) plus a **global status**:
+
+```text
+╭──────────────────────── Count Summary ────────────────────────╮
+│   Table              Count                   Sum              │
+│   gold.fct_invoice   277,583    252,068,690.39               │
+│   raw.invoice_lines  277,583    252,068,690.39               │
+│                                                               │
+│   Count               MATCH                  MATCH            │
+│   Status              MATCH                                   │
+╰───────────────────────────────────────────────────────────────╯
+```
+
+#### Thresholds
+
+Use `--count-threshold` and `--sum-threshold` to allow small differences. Each accepts a **percentage** (e.g. `5%`) or an **absolute** value (e.g. `100`):
+
+```bash
+# Allow up to 1% difference on counts and 500 absolute on sums
+quack-diff count \
+  -t bronze.orders -t silver.orders \
+  --sum-column amount \
+  --count-threshold 1% \
+  --sum-threshold 500
+```
+
+When values differ but fall within the threshold the status shows **PASS (within …)** instead of MATCH.
 
 ## Configuration
 

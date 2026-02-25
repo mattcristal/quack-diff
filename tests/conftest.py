@@ -8,16 +8,19 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from quack_diff.cli.console import set_json_output_mode
 from quack_diff.config import reset_settings
 from quack_diff.core.connector import DuckDBConnector
 
 
 @pytest.fixture(autouse=True)
 def reset_global_settings():
-    """Reset global settings before each test."""
+    """Reset global settings and console state before each test."""
     reset_settings()
+    set_json_output_mode(False)
     yield
     reset_settings()
+    set_json_output_mode(False)
 
 
 @pytest.fixture

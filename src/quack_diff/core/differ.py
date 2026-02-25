@@ -168,11 +168,52 @@ class DiffResult:
 
 
 @dataclass
+class Threshold:
+    """A tolerance that can be expressed as a percentage or an absolute value.
+
+    Parse from a string with :meth:`parse`::
+
+        Threshold.parse("5%")   -> Threshold(value=5.0, is_percentage=True)
+        Threshold.parse("100")  -> Threshold(value=100.0, is_percentage=False)
+    """
+
+    value: float
+    is_percentage: bool
+
+    @classmethod
+    def parse(cls, raw: str) -> Threshold:
+        """Parse ``"5%"`` or ``"100"`` into a :class:`Threshold`."""
+        raw = raw.strip()
+        if raw.endswith("%"):
+            return cls(value=float(raw[:-1]), is_percentage=True)
+        return cls(value=float(raw), is_percentage=False)
+
+    def within(self, reference: float | int, actual: float | int) -> bool:
+        """Return True when *actual* is within this threshold of *reference*."""
+        if reference == 0:
+            return actual == 0
+        diff = abs(actual - reference)
+        if self.is_percentage:
+            return (diff / abs(reference)) * 100 <= self.value
+        return diff <= self.value
+
+    def __str__(self) -> str:
+        if self.is_percentage:
+            nice = f"{self.value:g}"
+            return f"{nice}%"
+        return f"{self.value:g}"
+
+
+@dataclass
 class TableCount:
     """Row or distinct count for a single table."""
 
     table: str
     count: int
+    # Optional aggregate metric (e.g. SUM(column)) for extended count checks
+    sum_value: Any | None = None
+    # Name of the column used for sum_value, if applicable
+    sum_column: str | None = None
 
 
 @dataclass
@@ -182,6 +223,8 @@ class CountResult:
     table_counts: list[TableCount]
     key_column: str | None = None  # None = COUNT(*), else COUNT(DISTINCT key)
     is_match: bool = False
+    count_threshold: Threshold | None = None
+    sum_threshold: Threshold | None = None
 
     @property
     def mode(self) -> str:
@@ -194,6 +237,53 @@ class CountResult:
         if not self.table_counts:
             return None
         return self.table_counts[0].count
+
+    @property
+    def count_match(self) -> bool:
+        """True when all tables have the exact same count."""
+        if not self.table_counts:
+            return True
+        ref = self.table_counts[0].count
+        return all(tc.count == ref for tc in self.table_counts)
+
+    @property
+    def count_within_threshold(self) -> bool:
+        """True when all counts are within the configured threshold (or exact)."""
+        if self.count_match:
+            return True
+        if not self.count_threshold or not self.table_counts:
+            return False
+        ref = self.table_counts[0].count
+        return all(self.count_threshold.within(ref, tc.count) for tc in self.table_counts)
+
+    @property
+    def has_sum(self) -> bool:
+        """True when at least one table has a sum_value."""
+        return any(tc.sum_value is not None for tc in self.table_counts)
+
+    @property
+    def sum_match(self) -> bool | None:
+        """True when all sum values match exactly, None when no sums are present."""
+        if not self.has_sum:
+            return None
+        ref = self.table_counts[0].sum_value
+        return all(tc.sum_value == ref for tc in self.table_counts)
+
+    @property
+    def sum_within_threshold(self) -> bool | None:
+        """True when all sums are within the configured threshold (or exact). None when no sums."""
+        if not self.has_sum:
+            return None
+        if self.sum_match:
+            return True
+        if not self.sum_threshold:
+            return False
+        ref = self.table_counts[0].sum_value
+        if ref is None:
+            return False
+        return all(
+            tc.sum_value is not None and self.sum_threshold.within(ref, tc.sum_value) for tc in self.table_counts
+        )
 
 
 class DataDiffer:
