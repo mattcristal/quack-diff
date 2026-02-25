@@ -184,6 +184,34 @@ def _build_count_query(
     return f"SELECT COUNT(*) FROM {sanitized_table}"
 
 
+def _build_sum_query(
+    spec: TableSpec,
+    sum_column: str,
+    table_ref: str | None = None,
+) -> str:
+    """Build a SQL SUM query for a single :class:`TableSpec`.
+
+    The SUM is computed over the *entire* table (no implicit GROUP BY),
+    even when per-table [group_by] is used for the count. This matches
+    patterns like:
+
+        SELECT SUM(QUANTITY) FROM FCT_INVOICE;
+
+    Args:
+        spec: Parsed table specification
+        sum_column: Column to SUM()
+        table_ref: Override for the fully-qualified table reference to use
+            in the generated SQL.  When *None* the spec's ``table`` field
+            is used.
+
+    Returns:
+        SQL query string
+    """
+    sanitized_table = sanitize_identifier(table_ref or spec.table)
+    sanitized_col = sanitize_identifier(sum_column)
+    return f"SELECT SUM({sanitized_col}) FROM {sanitized_table}"
+
+
 def _full_table_ref(spec: TableSpec) -> str:
     """Reconstruct the dotted ``alias.table`` reference for local queries."""
     if spec.alias:
@@ -191,39 +219,62 @@ def _full_table_ref(spec: TableSpec) -> str:
     return spec.table
 
 
-def _execute_direct_count(
+def _execute_direct_metrics(
     connector: DuckDBConnector,
     settings: Settings,
     spec: TableSpec,
     key_column: str | None = None,
+    sum_column: str | None = None,
     verbose: bool = False,
-) -> int:
-    """Execute a count query for *spec* on the appropriate backend.
+) -> tuple[int, int | float | None]:
+    """Execute aggregate queries for *spec* on the appropriate backend.
 
-    Snowflake tables are counted directly on Snowflake (no data transfer).
-    DuckDB / local tables are counted via the DuckDB connector.
+    Always computes a COUNT (or COUNT(DISTINCT key_column)) and, when
+    *sum_column* is provided, also computes a SUM(sum_column).
+
+    Snowflake tables are aggregated directly on Snowflake (no data
+    transfer). DuckDB / local tables are aggregated via the DuckDB
+    connector.
 
     Returns:
-        Row count as an integer
+        Tuple of (row_count, sum_value_or_None)
     """
+    # COUNT / COUNT(DISTINCT ...)
+    count_query = _build_count_query(spec, key_column)
+
     if spec.is_snowflake:
         # Snowflake: use just the table part (alias is a connection ref, not a DB prefix)
-        query = _build_count_query(spec, key_column)
         config, database = _resolve_snowflake_config(spec.alias, settings)
         if verbose:
             print_info(f"Counting on Snowflake: {spec.raw}")
-            logger.debug(f"Snowflake count query: {query}")
-        result = connector.execute_snowflake_scalar(query=query, config=config, database=database)
+            logger.debug(f"Snowflake count query: {count_query}")
+        count_result = connector.execute_snowflake_scalar(query=count_query, config=config, database=database)
+
+        sum_result: int | float | None = None
+        if sum_column:
+            sum_query = _build_sum_query(spec, sum_column)
+            if verbose:
+                logger.debug(f"Snowflake sum query: {sum_query}")
+            sum_result = connector.execute_snowflake_scalar(query=sum_query, config=config, database=database)
     else:
         # DuckDB: reconstruct alias.table for attached databases
-        query = _build_count_query(spec, key_column, table_ref=_full_table_ref(spec))
+        table_ref = _full_table_ref(spec)
+        query = _build_count_query(spec, key_column, table_ref=table_ref)
         if verbose:
             print_info(f"Counting locally: {spec.raw}")
             logger.debug(f"DuckDB count query: {query}")
         row = connector.execute_fetchone(query)
-        result = row[0] if row else 0
+        count_result = row[0] if row else 0
 
-    return int(result)
+        sum_result = None
+        if sum_column:
+            sum_query = _build_sum_query(spec, sum_column, table_ref=table_ref)
+            if verbose:
+                logger.debug(f"DuckDB sum query: {sum_query}")
+            sum_row = connector.execute_fetchone(sum_query)
+            sum_result = sum_row[0] if sum_row else 0
+
+    return int(count_result), sum_result
 
 
 def _auto_attach_databases(
@@ -269,6 +320,18 @@ def count(
             "--key",
             "-k",
             help="Column for COUNT(DISTINCT ...); omit for COUNT(*)",
+        ),
+    ] = None,
+    sum_columns: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--sum-column",
+            "-s",
+            help=(
+                "Optional column(s) to SUM() alongside row counts. "
+                "Provide one value to use the same column for all tables, "
+                "or repeat to specify per-table columns matching the -t order."
+            ),
         ),
     ] = None,
     config_file: Annotated[
@@ -332,6 +395,37 @@ def count(
     for t in tables:
         flat_tables.extend(_split_table_arg(t))
 
+    # Normalise --sum-column values to a per-table list
+    per_table_sum_columns: list[str | None] = [None] * len(flat_tables)
+    if sum_columns:
+        flat_sums: list[str] = []
+        for s in sum_columns:
+            # Allow simple comma-separated syntax
+            flat_sums.extend([part.strip() for part in s.split(",") if part.strip()])
+
+        if len(flat_sums) == 1:
+            # Single column applied to all tables
+            per_table_sum_columns = [flat_sums[0]] * len(flat_tables)
+        elif len(flat_sums) == len(flat_tables):
+            # One column per table, in the same order
+            per_table_sum_columns = flat_sums
+        else:
+            msg = (
+                "Number of --sum-column values must be 1 or match the number of --tables "
+                f"(got {len(flat_sums)} sum columns for {len(flat_tables)} tables)."
+            )
+            if json_output:
+                print_json(
+                    format_error_json(
+                        error_type="ValueError",
+                        message=msg,
+                        exit_code=2,
+                    )
+                )
+            else:
+                print_error(msg)
+            raise typer.Exit(2)
+
     if len(flat_tables) < 2:
         if json_output:
             print_json(
@@ -370,19 +464,34 @@ def count(
                     table_counts: list[TableCount] = []
                     display_name_map: dict[str, str] = {}
                     for i, spec in enumerate(specs):
-                        count_val = _execute_direct_count(
+                        sum_col = per_table_sum_columns[i] if i < len(per_table_sum_columns) else None
+                        count_val, sum_val = _execute_direct_metrics(
                             connector=connector,
                             settings=settings,
                             spec=spec,
                             key_column=key,
+                            sum_column=sum_col,
                             verbose=verbose,
                         )
                         label = f"__direct_{i}"
-                        table_counts.append(TableCount(table=label, count=count_val))
+                        table_counts.append(
+                            TableCount(
+                                table=label,
+                                count=count_val,
+                                sum_value=sum_val,
+                                sum_column=sum_col,
+                            )
+                        )
                         display_name_map[label] = spec.raw
 
                 reference = table_counts[0].count
                 is_match = all(tc.count == reference for tc in table_counts)
+
+                # When SUM metrics are present, require them to match as well
+                if any(tc.sum_value is not None for tc in table_counts):
+                    sum_ref = table_counts[0].sum_value
+                    is_match = is_match and all(tc.sum_value == sum_ref for tc in table_counts)
+
                 result = CountResult(
                     table_counts=table_counts,
                     key_column=key,

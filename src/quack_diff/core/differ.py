@@ -173,6 +173,10 @@ class TableCount:
 
     table: str
     count: int
+    # Optional aggregate metric (e.g. SUM(column)) for extended count checks
+    sum_value: Any | None = None
+    # Name of the column used for sum_value, if applicable
+    sum_column: str | None = None
 
 
 @dataclass

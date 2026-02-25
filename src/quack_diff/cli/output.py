@@ -258,13 +258,20 @@ def format_count_result_json(
     status = "match" if result.is_match else "mismatch"
     exit_code = 0 if result.is_match else 1
 
-    tables_data = [
-        {
+    tables_data = []
+    for tc in result.table_counts:
+        table_entry: dict[str, Any] = {
             "table": display_name_map.get(tc.table, tc.table),
             "count": tc.count,
         }
-        for tc in result.table_counts
-    ]
+        # Include optional SUM metric when available
+        sum_val = getattr(tc, "sum_value", None)
+        sum_col = getattr(tc, "sum_column", None)
+        if sum_val is not None:
+            table_entry["sum"] = sum_val
+        if sum_col is not None:
+            table_entry["sum_column"] = sum_col
+        tables_data.append(table_entry)
 
     output = JSONCountOutput(
         status=status,

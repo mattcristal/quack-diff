@@ -392,10 +392,19 @@ def format_count_summary(
     table.add_column("Table", style="bold")
     table.add_column("Count", justify="right")
 
+    # Add SUM column when any table has a sum_value
+    has_sum = any(getattr(tc, "sum_value", None) is not None for tc in result.table_counts)
+    if has_sum:
+        table.add_column("Sum", justify="right")
+
     display_name_map = display_name_map or {}
     for tc in result.table_counts:
         display_name = display_name_map.get(tc.table, tc.table)
-        table.add_row(display_name, f"{tc.count:,}")
+        row = [display_name, f"{tc.count:,}"]
+        if has_sum:
+            sum_val = getattr(tc, "sum_value", None)
+            row.append("-" if sum_val is None else f"{sum_val:,}")
+        table.add_row(*row)
 
     table.add_row("", "")  # Spacer
     status = Text("MATCH", style="success") if result.is_match else Text("MISMATCH", style="error")
