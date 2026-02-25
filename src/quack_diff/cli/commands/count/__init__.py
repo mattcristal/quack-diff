@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -12,6 +14,7 @@ import typer
 from quack_diff.cli.console import (
     console,
     print_error,
+    print_info,
     print_success,
     set_json_output_mode,
     status_context,
@@ -21,13 +24,14 @@ from quack_diff.cli.formatters import print_count_result
 from quack_diff.cli.output import format_count_result_json, format_error_json, print_json
 from quack_diff.config import get_settings
 from quack_diff.core.connector import DuckDBConnector
-from quack_diff.core.differ import DataDiffer
+from quack_diff.core.differ import CountResult, DataDiffer, TableCount
 from quack_diff.core.sql_utils import (
     AttachError,
     DatabaseError,
     QueryExecutionError,
     SQLInjectionError,
     TableNotFoundError,
+    sanitize_identifier,
 )
 
 if TYPE_CHECKING:
@@ -35,13 +39,71 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_TABLE_SPEC_RE = re.compile(r"^(?P<ref>[^\[\]]+?)(?:\[(?P<group_by>[^\]]*)\])?$")
 
-def _parse_table_reference(table: str, known_aliases: set[str] | None = None) -> tuple[str | None, str]:
-    """Parse a table reference to extract alias and table name.
 
-    If known_aliases is provided (e.g. from settings.databases), any first
-    segment in that set is treated as an alias.
+@dataclass
+class TableSpec:
+    """Parsed table specification with optional group-by columns.
+
+    Created from the ``-t`` flag value, e.g.
+    ``"sf.DB.SCHEMA.TABLE[col1,col2]"``.
     """
+
+    raw: str
+    alias: str | None
+    table: str
+    group_by: list[str] | None
+    is_snowflake: bool
+
+
+def _parse_table_spec(table: str, settings: Settings) -> TableSpec:
+    """Parse a ``-t`` value into a :class:`TableSpec`.
+
+    Supports the inline bracket syntax for per-table GROUP BY::
+
+        sf.DATABASE.SCHEMA.TABLE               -> plain table
+        sf.DATABASE.SCHEMA.TABLE[col1,col2]    -> table with group-by
+
+    Args:
+        table: Raw ``-t`` value
+        settings: Application settings (used for alias resolution)
+
+    Returns:
+        Parsed TableSpec
+
+    Raises:
+        ValueError: If the syntax is invalid
+    """
+    m = _TABLE_SPEC_RE.match(table.strip())
+    if not m:
+        raise ValueError(
+            f"Invalid table specification: '{table}'. Expected format: 'alias.TABLE' or 'alias.TABLE[col1,col2,...]'"
+        )
+
+    ref = m.group("ref").strip()
+    group_by_str = m.group("group_by")
+    group_by: list[str] | None = None
+    if group_by_str is not None:
+        group_by = [c.strip() for c in group_by_str.split(",") if c.strip()]
+        if not group_by:
+            raise ValueError(f"Empty group-by column list in: '{table}'")
+
+    alias, table_name = _parse_table_reference(ref, settings)
+    is_sf = _is_snowflake_ref(alias, settings)
+
+    return TableSpec(
+        raw=table,
+        alias=alias,
+        table=table_name,
+        group_by=group_by,
+        is_snowflake=is_sf,
+    )
+
+
+def _parse_table_reference(table: str, settings: Settings) -> tuple[str | None, str]:
+    """Extract alias and table name from a dotted reference."""
+    known_aliases = set(settings.databases.keys()) if settings.databases else set()
     parts = table.split(".", 1)
     if len(parts) == 2 and parts[0].lower() in ("sf", "snowflake"):
         return parts[0].lower(), parts[1]
@@ -54,10 +116,8 @@ def _parse_table_reference(table: str, known_aliases: set[str] | None = None) ->
     return None, table
 
 
-def _is_snowflake_table(table: str, settings: Settings) -> bool:
-    """Check if a table reference points to a Snowflake table."""
-    known_aliases = set(settings.databases.keys()) if settings.databases else set()
-    alias, _ = _parse_table_reference(table, known_aliases=known_aliases)
+def _is_snowflake_ref(alias: str | None, settings: Settings) -> bool:
+    """Return True when *alias* points to a Snowflake connection."""
     if alias in ("sf", "snowflake"):
         return True
     if alias and alias in settings.databases:
@@ -66,21 +126,117 @@ def _is_snowflake_table(table: str, settings: Settings) -> bool:
     return False
 
 
+def _resolve_snowflake_config(alias: str | None, settings: Settings) -> tuple:
+    """Return ``(config, database)`` for a Snowflake alias.
+
+    Returns:
+        Tuple of (SnowflakeConfig, database_override | None)
+    """
+    config = None
+    database = None
+    if alias and alias in settings.databases:
+        db_config = settings.databases[alias]
+        connection_name = db_config.get("connection_name")
+        database = db_config.get("database")
+        if connection_name:
+            from quack_diff.config import SnowflakeConfig
+
+            config = SnowflakeConfig(connection_name=connection_name)
+    if config is None:
+        config = settings.snowflake
+    return config, database
+
+
+def _build_count_query(
+    spec: TableSpec,
+    key_column: str | None = None,
+    table_ref: str | None = None,
+) -> str:
+    """Build a SQL count query for a single :class:`TableSpec`.
+
+    Args:
+        spec: Parsed table specification
+        key_column: If set, use COUNT(DISTINCT key_column)
+        table_ref: Override for the fully-qualified table reference to use
+            in the generated SQL.  When *None* the spec's ``table`` field
+            is used.
+
+    Returns:
+        SQL query string
+
+    Raises:
+        ValueError: If both group_by and key_column are specified
+    """
+    if spec.group_by and key_column:
+        raise ValueError(f"Cannot combine --key with per-table [group_by] (table: '{spec.raw}'). Use one or the other.")
+
+    sanitized_table = sanitize_identifier(table_ref or spec.table)
+
+    if spec.group_by:
+        sanitized_cols = [sanitize_identifier(c) for c in spec.group_by]
+        cols_str = ", ".join(sanitized_cols)
+        return f"SELECT COUNT(*) FROM (SELECT 1 FROM {sanitized_table} GROUP BY {cols_str})"
+
+    if key_column:
+        sanitized_key = sanitize_identifier(key_column)
+        return f"SELECT COUNT(DISTINCT {sanitized_key}) FROM {sanitized_table}"
+
+    return f"SELECT COUNT(*) FROM {sanitized_table}"
+
+
+def _full_table_ref(spec: TableSpec) -> str:
+    """Reconstruct the dotted ``alias.table`` reference for local queries."""
+    if spec.alias:
+        return f"{spec.alias}.{spec.table}"
+    return spec.table
+
+
+def _execute_direct_count(
+    connector: DuckDBConnector,
+    settings: Settings,
+    spec: TableSpec,
+    key_column: str | None = None,
+    verbose: bool = False,
+) -> int:
+    """Execute a count query for *spec* on the appropriate backend.
+
+    Snowflake tables are counted directly on Snowflake (no data transfer).
+    DuckDB / local tables are counted via the DuckDB connector.
+
+    Returns:
+        Row count as an integer
+    """
+    if spec.is_snowflake:
+        # Snowflake: use just the table part (alias is a connection ref, not a DB prefix)
+        query = _build_count_query(spec, key_column)
+        config, database = _resolve_snowflake_config(spec.alias, settings)
+        if verbose:
+            print_info(f"Counting on Snowflake: {spec.raw}")
+            logger.debug(f"Snowflake count query: {query}")
+        result = connector.execute_snowflake_scalar(query=query, config=config, database=database)
+    else:
+        # DuckDB: reconstruct alias.table for attached databases
+        query = _build_count_query(spec, key_column, table_ref=_full_table_ref(spec))
+        if verbose:
+            print_info(f"Counting locally: {spec.raw}")
+            logger.debug(f"DuckDB count query: {query}")
+        row = connector.execute_fetchone(query)
+        result = row[0] if row else 0
+
+    return int(result)
+
+
 def _auto_attach_databases(
     connector: DuckDBConnector,
     settings: Settings,
-    tables: list[str],
+    specs: list[TableSpec],
     verbose: bool = False,
 ) -> None:
-    """Auto-attach DuckDB databases for any aliases in table references."""
-    known_aliases = set(settings.databases.keys()) if settings.databases else set()
-    aliases_to_attach: set[str] = set()
-    for table in tables:
-        alias, _ = _parse_table_reference(table, known_aliases=known_aliases)
-        if alias:
-            aliases_to_attach.add(alias)
-
-    for alias in aliases_to_attach:
+    """Auto-attach DuckDB databases for non-Snowflake aliases."""
+    for spec in specs:
+        alias = spec.alias
+        if not alias or spec.is_snowflake:
+            continue
         if alias in connector.attached_databases:
             continue
         if alias in settings.databases:
@@ -90,58 +246,8 @@ def _auto_attach_databases(
                 path = db_config.get("path")
                 if path:
                     if verbose:
-                        from quack_diff.cli.console import print_info
-
                         print_info(f"Attaching DuckDB database: {path} as '{alias}'")
                     connector.attach_duckdb(alias, str(path))
-
-
-def _resolve_tables_for_count(
-    connector: DuckDBConnector,
-    settings: Settings,
-    tables: list[str],
-    verbose: bool = False,
-) -> tuple[list[str], dict[str, str]]:
-    """Resolve table list: pull Snowflake tables locally, return (resolved_names, display_name_map)."""
-    resolved: list[str] = []
-    display_name_map: dict[str, str] = {}
-
-    known_aliases = set(settings.databases.keys()) if settings.databases else set()
-    for i, table in enumerate(tables):
-        alias, table_name = _parse_table_reference(table, known_aliases=known_aliases)
-        if alias and _is_snowflake_table(table, settings):
-            local_name = f"__count_pulled_{i}"
-            if verbose:
-                from quack_diff.cli.console import print_info
-
-                print_info(f"Pulling Snowflake table: {table_name}")
-
-            config = None
-            database = None
-            if alias in settings.databases:
-                db_config = settings.databases[alias]
-                connection_name = db_config.get("connection_name")
-                database = db_config.get("database")
-                if connection_name:
-                    from quack_diff.config import SnowflakeConfig
-
-                    config = SnowflakeConfig(connection_name=connection_name)
-            if config is None:
-                config = settings.snowflake
-
-            connector.pull_snowflake_table(
-                table_name=table_name,
-                local_name=local_name,
-                config=config,
-                database=database,
-            )
-            resolved.append(local_name)
-            display_name_map[local_name] = table
-        else:
-            resolved.append(table)
-            display_name_map[table] = table
-
-    return resolved, display_name_map
 
 
 def count(
@@ -150,7 +256,11 @@ def count(
         typer.Option(
             "--tables",
             "-t",
-            help="Table(s) to compare counts (repeat or comma-separated)",
+            help=(
+                "Table(s) to compare counts (repeat or comma-separated). "
+                "Append [col1,col2,...] to GROUP BY before counting, e.g. "
+                "'sf.DB.SCHEMA.TABLE[salesid,linenum]'"
+            ),
         ),
     ],
     key: Annotated[
@@ -188,19 +298,28 @@ def count(
     Use this to validate bronze/silver/gold (or any pipeline) layers
     have the same number of records without running a full diff.
 
+    Tables can optionally specify per-table GROUP BY columns using bracket
+    syntax. This counts distinct combinations rather than raw rows.
+
     Examples:
 
         # Same row count across layers
+
         quack-diff count -t bronze.orders -t silver.orders -t gold.orders
 
         # Same distinct ID count
-        quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key order_id
 
-        # Comma-separated tables
-        quack-diff count --tables bronze.orders,silver.orders,gold.orders --key id
+        quack-diff count -t bronze.orders -t silver.orders --key order_id
+
+        # Per-table GROUP BY (count distinct groups in second table)
+
+        quack-diff count \\
+            -t sf.GOLD.FCT_INVOICE \\
+            -t "sf.RAW.INVOICE_LINES[salesid,linenum,tariffcode,linestartdate]"
 
         # JSON for CI/CD
-        quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key id --json
+
+        quack-diff count -t bronze.orders -t silver.orders --key id --json
     """
     if json_output:
         set_json_output_mode(True)
@@ -208,9 +327,10 @@ def count(
     start_time = time.time()
 
     # Flatten: support both -t a -t b and -t "a,b"
+    # Be careful not to split inside [...] brackets
     flat_tables: list[str] = []
     for t in tables:
-        flat_tables.extend(s.strip() for s in t.split(",") if s.strip())
+        flat_tables.extend(_split_table_arg(t))
 
     if len(flat_tables) < 2:
         if json_output:
@@ -227,33 +347,63 @@ def count(
 
     try:
         settings = get_settings(config_file=config_file)
-        use_snowflake = any(_is_snowflake_table(t, settings) for t in flat_tables)
+
+        # Parse all table specs (may raise ValueError for bad syntax)
+        specs = [_parse_table_spec(t, settings) for t in flat_tables]
+
+        any_snowflake = any(s.is_snowflake for s in specs)
+        any_has_group_by = any(s.group_by for s in specs)
+
+        # When there are group-by specs or Snowflake tables we use the
+        # direct-execution path (counts run on the source database).
+        # For pure local tables without group-by we can still use the
+        # legacy differ.count_check path.
+        use_direct = any_snowflake or any_has_group_by
 
         with DuckDBConnector(settings=settings) as connector:
-            if use_snowflake:
-                with status_context("Pulling data from Snowflake..."):
-                    resolved_tables, display_name_map = _resolve_tables_for_count(
-                        connector=connector,
-                        settings=settings,
-                        tables=flat_tables,
-                        verbose=verbose,
-                    )
-            else:
-                _auto_attach_databases(connector, settings, flat_tables, verbose)
-                resolved_tables = flat_tables
-                display_name_map = {t: t for t in flat_tables}
+            if use_direct:
+                # Attach any DuckDB databases needed for local tables
+                _auto_attach_databases(connector, settings, specs, verbose)
 
-            differ = DataDiffer(
-                connector=connector,
-                null_sentinel=settings.defaults.null_sentinel,
-                column_delimiter=settings.defaults.column_delimiter,
-            )
+                status_msg = "Counting on Snowflake..." if any_snowflake else "Counting..."
+                with status_context(status_msg):
+                    table_counts: list[TableCount] = []
+                    display_name_map: dict[str, str] = {}
+                    for i, spec in enumerate(specs):
+                        count_val = _execute_direct_count(
+                            connector=connector,
+                            settings=settings,
+                            spec=spec,
+                            key_column=key,
+                            verbose=verbose,
+                        )
+                        label = f"__direct_{i}"
+                        table_counts.append(TableCount(table=label, count=count_val))
+                        display_name_map[label] = spec.raw
 
-            with status_context("Counting..."):
-                result = differ.count_check(
-                    tables=resolved_tables,
+                reference = table_counts[0].count
+                is_match = all(tc.count == reference for tc in table_counts)
+                result = CountResult(
+                    table_counts=table_counts,
                     key_column=key,
+                    is_match=is_match,
                 )
+            else:
+                # Legacy path: all local, no group-by
+                plain_tables = [_full_table_ref(s) for s in specs]
+                _auto_attach_databases(connector, settings, specs, verbose)
+                display_name_map = {_full_table_ref(s): s.raw for s in specs}
+
+                differ = DataDiffer(
+                    connector=connector,
+                    null_sentinel=settings.defaults.null_sentinel,
+                    column_delimiter=settings.defaults.column_delimiter,
+                )
+                with status_context("Counting..."):
+                    result = differ.count_check(
+                        tables=plain_tables,
+                        key_column=key,
+                    )
 
         duration = time.time() - start_time
 
@@ -290,6 +440,34 @@ def count(
         _handle_error(e, "Invalid value", verbose, json_output, start_time)
     except Exception as e:
         _handle_error(e, "Unexpected error", verbose, json_output, start_time)
+
+
+def _split_table_arg(value: str) -> list[str]:
+    """Split a comma-separated ``-t`` value, respecting ``[...]`` brackets.
+
+    ``"sf.A,sf.B[x,y]"`` -> ``["sf.A", "sf.B[x,y]"]``
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for ch in value:
+        if ch == "[":
+            depth += 1
+            current.append(ch)
+        elif ch == "]":
+            depth = max(depth - 1, 0)
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            token = "".join(current).strip()
+            if token:
+                parts.append(token)
+            current = []
+        else:
+            current.append(ch)
+    token = "".join(current).strip()
+    if token:
+        parts.append(token)
+    return parts
 
 
 def _handle_error(

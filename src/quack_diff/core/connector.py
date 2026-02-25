@@ -546,6 +546,128 @@ class DuckDBConnector:
 
         return sanitized_local
 
+    def _build_snowflake_conn_params(
+        self,
+        config: SnowflakeConfig | None = None,
+        database: str | None = None,
+    ) -> dict[str, Any]:
+        """Build Snowflake connection parameters from config and settings.
+
+        Args:
+            config: SnowflakeConfig instance (falls back to self._settings.snowflake)
+            database: Optional database override
+
+        Returns:
+            Dict of connection parameters for snowflake.connector.connect()
+
+        Raises:
+            ImportError: If snowflake-connector-python is not installed
+            ValueError: If required credentials are missing
+        """
+        try:
+            import snowflake.connector  # noqa: F401
+        except ImportError as e:
+            raise ImportError(
+                "snowflake-connector-python is required for Snowflake operations. "
+                "Install it with: pip install snowflake-connector-python"
+            ) from e
+
+        if config is None and self._settings is not None:
+            config = self._settings.snowflake
+
+        account = config.account if config else None
+        user = config.user if config else None
+        password = config.password if config else None
+        db = database or (config.database if config else None)
+        schema = config.schema_name if config else None
+        warehouse = config.warehouse if config else None
+        role = config.role if config else None
+        authenticator = config.authenticator if config else None
+
+        auth_type = (authenticator or "").lower()
+        conn_params: dict[str, Any] = {"account": account}
+
+        if auth_type in ("externalbrowser", "ext_browser"):
+            conn_params["authenticator"] = "externalbrowser"
+            if user:
+                conn_params["user"] = user
+        else:
+            if not all([account, user, password]):
+                raise ValueError(
+                    "Snowflake connection requires account, user, and password. "
+                    "Provide via config, connection_name, or environment variables."
+                )
+            conn_params["user"] = user
+            conn_params["password"] = password
+
+        if db:
+            conn_params["database"] = db
+        if schema:
+            conn_params["schema"] = schema
+        if warehouse:
+            conn_params["warehouse"] = warehouse
+        if role:
+            conn_params["role"] = role
+
+        return conn_params
+
+    def execute_snowflake_scalar(
+        self,
+        query: str,
+        config: SnowflakeConfig | None = None,
+        database: str | None = None,
+    ) -> Any:
+        """Execute a SQL query on Snowflake and return a single scalar value.
+
+        Useful for running COUNT queries or other aggregations directly on
+        Snowflake without pulling data into DuckDB.
+
+        Args:
+            query: SQL query that returns exactly one row with one column
+            config: SnowflakeConfig instance (falls back to settings)
+            database: Optional database override
+
+        Returns:
+            The scalar value from the query result
+
+        Raises:
+            ImportError: If snowflake-connector-python is not installed
+            ValueError: If required credentials are missing
+            QueryExecutionError: If the query fails or returns non-scalar result
+        """
+        import snowflake.connector
+
+        conn_params = self._build_snowflake_conn_params(config=config, database=database)
+
+        logger.info(f"Executing Snowflake scalar query: {query[:120]}...")
+        logger.debug(f"Full query: {query}")
+
+        try:
+            with snowflake.connector.connect(**conn_params) as sf_conn:
+                cursor = sf_conn.cursor()
+                try:
+                    cursor.execute(query)
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise QueryExecutionError(
+                            "Snowflake query returned no rows (expected exactly one scalar value)",
+                            query=query,
+                        )
+                    if len(row) != 1:
+                        raise QueryExecutionError(
+                            f"Snowflake query returned {len(row)} columns (expected exactly one)",
+                            query=query,
+                        )
+                    return row[0]
+                finally:
+                    cursor.close()
+        except snowflake.connector.errors.ProgrammingError as e:
+            raise QueryExecutionError(
+                f"Snowflake query failed: {e}",
+                query=query,
+                details=str(e),
+            ) from e
+
     @property
     def attached_databases(self) -> dict[str, AttachedDatabase]:
         """Get dictionary of attached databases."""
