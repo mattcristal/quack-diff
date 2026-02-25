@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 
 from quack_diff import __version__
-from quack_diff.cli.commands import attach, compare, schema
+from quack_diff.cli.commands import attach, compare, count, schema
 from quack_diff.cli.console import console
 
 app = typer.Typer(
@@ -17,6 +17,7 @@ app = typer.Typer(
 
 # Register commands
 app.command()(compare)
+app.command()(count)
 app.command()(schema)
 app.command()(attach)
 

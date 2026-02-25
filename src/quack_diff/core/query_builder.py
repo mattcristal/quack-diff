@@ -181,6 +181,44 @@ ORDER BY {sanitized_key}"""
 
         return f"SELECT COUNT(*) AS row_count FROM {table_ref}"
 
+    def build_distinct_count_query(
+        self,
+        table: str,
+        key_column: str,
+        dialect: Dialect | str = Dialect.DUCKDB,
+        timestamp: str | None = None,
+        offset: str | None = None,
+    ) -> str:
+        """Build a query that counts distinct values in a key column.
+
+        Args:
+            table: Fully qualified table name
+            key_column: Column to count distinct values for
+            dialect: SQL dialect
+            timestamp: Optional timestamp for time-travel
+            offset: Optional offset for time-travel
+
+        Returns:
+            SQL query string
+
+        Raises:
+            SQLInjectionError: If table or column name contains unsafe characters
+        """
+        adapter = self.get_adapter(dialect)
+
+        sanitized_table = sanitize_identifier(table)
+        sanitized_key = sanitize_identifier(key_column)
+
+        table_ref = sanitized_table
+        if timestamp is not None or offset is not None:
+            table_ref = adapter.wrap_table_with_time_travel(
+                table=sanitized_table,
+                timestamp=timestamp,
+                offset=offset,
+            )
+
+        return f"SELECT COUNT(DISTINCT {sanitized_key}) AS row_count FROM {table_ref}"
+
     def build_schema_query(
         self,
         table: str,

@@ -53,6 +53,29 @@ class TestQueryBuilder:
         assert "SELECT COUNT(*)" in query
         assert "my_table" in query
 
+    def test_build_distinct_count_query(self, builder: QueryBuilder):
+        """Test distinct count query generation."""
+        query = builder.build_distinct_count_query(
+            table="my_table",
+            key_column="id",
+            dialect=Dialect.DUCKDB,
+        )
+
+        assert "SELECT COUNT(DISTINCT" in query
+        assert "id" in query
+        assert "my_table" in query
+        assert "row_count" in query
+
+    def test_build_distinct_count_query_snowflake(self, builder: QueryBuilder):
+        """Test distinct count query for Snowflake dialect."""
+        query = builder.build_distinct_count_query(
+            table="sf.schema.t",
+            key_column="order_id",
+            dialect=Dialect.DUCKDB,
+        )
+        assert "COUNT(DISTINCT" in query
+        assert "order_id" in query
+
     def test_build_schema_query(self, builder: QueryBuilder):
         """Test schema query generation."""
         query = builder.build_schema_query(

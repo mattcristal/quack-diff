@@ -5,10 +5,12 @@ import pytest
 from quack_diff.core.connector import DuckDBConnector
 from quack_diff.core.differ import (
     ColumnInfo,
+    CountResult,
     DataDiffer,
     DiffResult,
     DiffType,
     SchemaComparisonResult,
+    TableCount,
 )
 from quack_diff.core.sql_utils import KeyColumnError, SchemaError, TableNotFoundError
 
@@ -181,6 +183,127 @@ class TestDataDiffer:
         )
 
         assert is_match is False
+
+    def test_count_check_matching_tables(self, identical_tables: DuckDBConnector):
+        """Test count_check when all tables have the same row count."""
+        differ = DataDiffer(identical_tables)
+        result = differ.count_check(
+            tables=["identical_source", "identical_target"],
+            key_column=None,
+        )
+
+        assert isinstance(result, CountResult)
+        assert result.is_match
+        assert len(result.table_counts) == 2
+        assert result.table_counts[0].count == result.table_counts[1].count == 3
+        assert result.mode == "rows"
+        assert result.expected_count == 3
+
+    def test_count_check_mismatching_tables(self, connector: DuckDBConnector):
+        """Test count_check when tables have different row counts."""
+        connector.execute("CREATE TABLE small (id INT)")
+        connector.execute("INSERT INTO small VALUES (1), (2)")
+        connector.execute("CREATE TABLE large (id INT)")
+        connector.execute("INSERT INTO large VALUES (1), (2), (3), (4)")
+
+        differ = DataDiffer(connector)
+        result = differ.count_check(
+            tables=["small", "large"],
+            key_column=None,
+        )
+
+        assert isinstance(result, CountResult)
+        assert not result.is_match
+        assert result.table_counts[0].table == "small"
+        assert result.table_counts[0].count == 2
+        assert result.table_counts[1].table == "large"
+        assert result.table_counts[1].count == 4
+
+    def test_count_check_three_tables_mismatch(self, connector: DuckDBConnector):
+        """Test count_check with three tables where one has different count."""
+        connector.execute("CREATE TABLE t1 (id INT)")
+        connector.execute("INSERT INTO t1 VALUES (1), (2), (3)")
+        connector.execute("CREATE TABLE t2 (id INT)")
+        connector.execute("INSERT INTO t2 VALUES (1), (2), (3)")
+        connector.execute("CREATE TABLE t3 (id INT)")
+        connector.execute("INSERT INTO t3 VALUES (1), (2)")
+
+        differ = DataDiffer(connector)
+        result = differ.count_check(tables=["t1", "t2", "t3"], key_column=None)
+
+        assert not result.is_match
+        assert [tc.count for tc in result.table_counts] == [3, 3, 2]
+
+    def test_count_check_distinct_key(self, identical_tables: DuckDBConnector):
+        """Test count_check with COUNT(DISTINCT key)."""
+        differ = DataDiffer(identical_tables)
+        result = differ.count_check(
+            tables=["identical_source", "identical_target"],
+            key_column="id",
+        )
+
+        assert result.is_match
+        assert result.mode == "distinct"
+        assert result.key_column == "id"
+        assert result.table_counts[0].count == 3
+        assert result.table_counts[1].count == 3
+
+    def test_count_check_empty_tables_list(self, connector: DuckDBConnector):
+        """Test count_check with empty table list returns match."""
+        differ = DataDiffer(connector)
+        result = differ.count_check(tables=[], key_column=None)
+
+        assert result.is_match
+        assert result.table_counts == []
+        assert result.expected_count is None
+
+    def test_count_check_single_table(self, identical_tables: DuckDBConnector):
+        """Test count_check with single table is match."""
+        differ = DataDiffer(identical_tables)
+        result = differ.count_check(
+            tables=["identical_source"],
+            key_column=None,
+        )
+
+        assert result.is_match
+        assert len(result.table_counts) == 1
+        assert result.table_counts[0].count == 3
+
+
+class TestCountResult:
+    """Tests for CountResult dataclass."""
+
+    def test_mode_rows_when_no_key(self):
+        """Test mode is 'rows' when key_column is None."""
+        result = CountResult(
+            table_counts=[TableCount("a", 10), TableCount("b", 10)],
+            key_column=None,
+            is_match=True,
+        )
+        assert result.mode == "rows"
+
+    def test_mode_distinct_when_key_set(self):
+        """Test mode is 'distinct' when key_column is set."""
+        result = CountResult(
+            table_counts=[TableCount("a", 10), TableCount("b", 10)],
+            key_column="id",
+            is_match=True,
+        )
+        assert result.mode == "distinct"
+
+    def test_expected_count_first_table(self):
+        """Test expected_count is first table's count."""
+        result = CountResult(
+            table_counts=[TableCount("a", 100), TableCount("b", 100)],
+            key_column=None,
+            is_match=True,
+        )
+        assert result.expected_count == 100
+
+    def test_expected_count_empty(self):
+        """Test expected_count is None when no tables."""
+        result = CountResult(table_counts=[], key_column=None, is_match=True)
+        assert result.expected_count is None
 
 
 class TestDiffResult:
