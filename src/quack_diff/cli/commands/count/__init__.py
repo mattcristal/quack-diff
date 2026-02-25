@@ -24,7 +24,7 @@ from quack_diff.cli.formatters import print_count_result
 from quack_diff.cli.output import format_count_result_json, format_error_json, print_json
 from quack_diff.config import get_settings
 from quack_diff.core.connector import DuckDBConnector
-from quack_diff.core.differ import CountResult, DataDiffer, TableCount
+from quack_diff.core.differ import CountResult, DataDiffer, TableCount, Threshold
 from quack_diff.core.sql_utils import (
     AttachError,
     DatabaseError,
@@ -334,6 +334,20 @@ def count(
             ),
         ),
     ] = None,
+    count_threshold: Annotated[
+        str | None,
+        typer.Option(
+            "--count-threshold",
+            help=("Tolerance for row counts. Use a percentage (e.g. '5%%') or an absolute value (e.g. '100')."),
+        ),
+    ] = None,
+    sum_threshold: Annotated[
+        str | None,
+        typer.Option(
+            "--sum-threshold",
+            help=("Tolerance for sum values. Use a percentage (e.g. '1%%') or an absolute value (e.g. '500')."),
+        ),
+    ] = None,
     config_file: Annotated[
         Path | None,
         typer.Option(
@@ -388,6 +402,22 @@ def count(
         set_json_output_mode(True)
 
     start_time = time.time()
+
+    # Parse threshold values
+    parsed_count_threshold: Threshold | None = None
+    parsed_sum_threshold: Threshold | None = None
+    try:
+        if count_threshold is not None:
+            parsed_count_threshold = Threshold.parse(count_threshold)
+        if sum_threshold is not None:
+            parsed_sum_threshold = Threshold.parse(sum_threshold)
+    except ValueError as exc:
+        msg = f"Invalid threshold value: {exc}"
+        if json_output:
+            print_json(format_error_json(error_type="ValueError", message=msg, exit_code=2))
+        else:
+            print_error(msg)
+        raise typer.Exit(2) from None
 
     # Flatten: support both -t a -t b and -t "a,b"
     # Be careful not to split inside [...] brackets
@@ -484,19 +514,13 @@ def count(
                         )
                         display_name_map[label] = spec.raw
 
-                reference = table_counts[0].count
-                is_match = all(tc.count == reference for tc in table_counts)
-
-                # When SUM metrics are present, require them to match as well
-                if any(tc.sum_value is not None for tc in table_counts):
-                    sum_ref = table_counts[0].sum_value
-                    is_match = is_match and all(tc.sum_value == sum_ref for tc in table_counts)
-
                 result = CountResult(
                     table_counts=table_counts,
                     key_column=key,
-                    is_match=is_match,
+                    count_threshold=parsed_count_threshold,
+                    sum_threshold=parsed_sum_threshold,
                 )
+                result.is_match = result.count_within_threshold and (result.sum_within_threshold is not False)
             else:
                 # Legacy path: all local, no group-by
                 plain_tables = [_full_table_ref(s) for s in specs]
@@ -513,6 +537,9 @@ def count(
                         tables=plain_tables,
                         key_column=key,
                     )
+                result.count_threshold = parsed_count_threshold
+                result.sum_threshold = parsed_sum_threshold
+                result.is_match = result.count_within_threshold and (result.sum_within_threshold is not False)
 
         duration = time.time() - start_time
 
@@ -527,7 +554,11 @@ def count(
             print_count_result(result, display_name_map=display_name_map)
 
         if result.is_match:
-            print_success("All table counts match!")
+            exact = result.count_match and (result.sum_match is not False)
+            if exact:
+                print_success("All table counts match!")
+            else:
+                print_success("All metrics within threshold")
             raise typer.Exit(0)
         else:
             print_error("Table counts do not match")

@@ -91,6 +91,12 @@ class JSONCountOutput:
     mode: str  # "rows", "distinct"
     tables: list[dict[str, Any]]
     is_match: bool
+    count_match: bool = True
+    count_within_threshold: bool = True
+    count_threshold: str | None = None
+    sum_match: bool | None = None
+    sum_within_threshold: bool | None = None
+    sum_threshold: str | None = None
 
 
 def get_version() -> str:
@@ -284,6 +290,12 @@ def format_count_result_json(
         mode=result.mode,
         tables=tables_data,
         is_match=result.is_match,
+        count_match=result.count_match,
+        count_within_threshold=result.count_within_threshold,
+        count_threshold=str(result.count_threshold) if result.count_threshold else None,
+        sum_match=result.sum_match,
+        sum_within_threshold=result.sum_within_threshold,
+        sum_threshold=str(result.sum_threshold) if result.sum_threshold else None,
     )
     return asdict(output)
 

@@ -14,7 +14,7 @@ from quack_diff.cli.console import console
 from quack_diff.core.differ import CountResult, DiffType
 
 if TYPE_CHECKING:
-    from quack_diff.core.differ import DiffResult, SchemaComparisonResult
+    from quack_diff.core.differ import DiffResult, SchemaComparisonResult, Threshold
 
 
 @dataclass
@@ -375,6 +375,19 @@ def print_snowflake_connections(connections: list[SnowflakeConnectionInfo]) -> N
     console.print()
 
 
+def _metric_status(
+    exact: bool,
+    within: bool,
+    threshold: Threshold | None,
+) -> Text:
+    """Return a styled status label for a single metric (count or sum)."""
+    if exact:
+        return Text("MATCH", style="success")
+    if within and threshold is not None:
+        return Text(f"PASS (within {threshold})", style="success")
+    return Text("MISMATCH", style="error")
+
+
 def format_count_summary(
     result: CountResult,
     display_name_map: dict[str, str] | None = None,
@@ -407,12 +420,39 @@ def format_count_summary(
         table.add_row(*row)
 
     table.add_row("", "")  # Spacer
-    status = Text("MATCH", style="success") if result.is_match else Text("MISMATCH", style="error")
-    table.add_row("Status", status)
+
+    count_status = _metric_status(
+        exact=result.count_match,
+        within=result.count_within_threshold,
+        threshold=result.count_threshold,
+    )
+    status_row: list[str | Text] = ["Count", count_status]
+    if has_sum:
+        sum_status = _metric_status(
+            exact=result.sum_match is True,
+            within=result.sum_within_threshold is True,
+            threshold=result.sum_threshold,
+        )
+        status_row.append(sum_status)
+    table.add_row(*status_row)
+
+    global_status = Text("MATCH", style="success") if result.is_match else Text("MISMATCH", style="error")
+    global_row: list[str | Text] = ["Status", global_status]
+    if has_sum:
+        global_row.append("")
+    table.add_row(*global_row)
+
+    # Show configured thresholds below the panel
+    threshold_parts: list[str] = []
+    if result.count_threshold:
+        threshold_parts.append(f"count {result.count_threshold}")
+    if result.sum_threshold:
+        threshold_parts.append(f"sum {result.sum_threshold}")
+    subtitle = f"threshold: {', '.join(threshold_parts)}" if threshold_parts else None
 
     title = "Count Summary"
     border_style = "green" if result.is_match else "red"
-    return Panel(table, title=title, border_style=border_style)
+    return Panel(table, title=title, subtitle=subtitle, border_style=border_style)
 
 
 def print_count_result(

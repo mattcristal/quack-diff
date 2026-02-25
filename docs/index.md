@@ -53,6 +53,24 @@ quack-diff count -t bronze.orders -t silver.orders -t gold.orders
 # Same distinct ID count
 quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key order_id
 
+# Per-table GROUP BY (count distinct groups in second table)
+quack-diff count \
+  -t sf.GOLD.FCT_INVOICE \
+  -t "sf.RAW.INVOICE_LINES[salesid,linenum,tariffcode,linestartdate]"
+
+# Add SUM validation alongside row counts
+quack-diff count \
+  -t sf.GOLD.FCT_INVOICE \
+  -t "sf.RAW.INVOICE_LINES[salesid,linenum]" \
+  --sum-column QUANTITY --sum-column qty
+
+# Allow tolerances (percentage or absolute)
+quack-diff count \
+  -t bronze.orders -t silver.orders \
+  --sum-column amount \
+  --count-threshold 1% \
+  --sum-threshold 500
+
 # JSON for CI/CD
 quack-diff count -t bronze.orders -t silver.orders -t gold.orders --key order_id --json
 ```
